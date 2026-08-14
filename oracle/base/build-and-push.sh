@@ -16,7 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 REGISTRY_HOST="container-registry.oracle.com"
-LOCAL_REGISTRY="localhost:5000"
 NAMESPACE="servicetech2"
 
 c_reset='\033[0m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_cyan='\033[36m'
@@ -44,6 +43,13 @@ ask_secret() {
 echo "=============================================================="
 echo " Oracle 베이스 이미지 빌드 + servicetech2 레지스트리 등록"
 echo "=============================================================="
+
+# ---------- 0. 대상 레지스트리 주소 ----------
+# 개발 PC: localhost:5000 (이 PC에서 만든 로컬 레지스트리)
+# 사무실/실서버: servicetech2-registry:5000 (hosts 파일 등록 필요, registry-server/linux-registry-setup.md 참고)
+echo
+ask "대상 레지스트리 주소 (호스트:포트)" "${REGISTRY_ADDR:-localhost:5000}"
+LOCAL_REGISTRY="$REPLY"
 
 # ---------- 1. DB 종류 ----------
 echo

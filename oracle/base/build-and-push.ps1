@@ -16,7 +16,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
 $RegistryHost = "container-registry.oracle.com"
-$LocalRegistry = "localhost:5000"
 $Namespace = "servicetech2"
 
 function Write-Info($msg)  { Write-Host "[정보] $msg" -ForegroundColor Cyan }
@@ -47,6 +46,12 @@ function Ask-Secret([string]$Prompt) {
 Write-Host "=============================================================="
 Write-Host " Oracle 베이스 이미지 빌드 + servicetech2 레지스트리 등록"
 Write-Host "=============================================================="
+
+# 개발 PC: localhost:5000 (이 PC에서 만든 로컬 레지스트리)
+# 사무실/실서버: servicetech2-registry:5000 (hosts 파일 등록 필요, registry-server/linux-registry-setup.md 참고)
+Write-Host ""
+$envDefault = if ($env:REGISTRY_ADDR) { $env:REGISTRY_ADDR } else { "localhost:5000" }
+$LocalRegistry = Ask "대상 레지스트리 주소 (호스트:포트)" $envDefault
 
 Write-Host ""
 Write-Host "DB 종류를 선택하세요 (현재는 Oracle만 지원):"

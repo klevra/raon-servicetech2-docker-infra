@@ -19,7 +19,6 @@
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
-$LocalRegistry = "localhost:5000"
 $Namespace = "servicetech2"
 
 function Write-Info($msg)  { Write-Host "[정보] $msg" -ForegroundColor Cyan }
@@ -62,6 +61,11 @@ Write-Host "=============================================================="
 Write-Host " Oracle 테스트 인스턴스 배포 (servicetech2 레지스트리 기반)"
 Write-Host " (테스트/개발/데모 목적 전용 — 운영 환경 사용 금지)"
 Write-Host "=============================================================="
+
+# 개발 PC: localhost:5000 / 사무실·실서버: servicetech2-registry:5000 (hosts 등록 필요)
+Write-Host ""
+$envDefault = if ($env:REGISTRY_ADDR) { $env:REGISTRY_ADDR } else { "localhost:5000" }
+$LocalRegistry = Ask "대상 레지스트리 주소 (호스트:포트)" $envDefault
 
 Write-Host ""
 Write-Host "DB 종류를 선택하세요 (현재는 Oracle만 지원):"

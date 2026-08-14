@@ -25,7 +25,6 @@ export MSYS_NO_PATHCONV=1
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-LOCAL_REGISTRY="localhost:5000"
 NAMESPACE="servicetech2"
 
 c_reset='\033[0m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_cyan='\033[36m'
@@ -66,6 +65,12 @@ echo "=============================================================="
 echo " Oracle 테스트 인스턴스 배포 (servicetech2 레지스트리 기반)"
 echo " (테스트/개발/데모 목적 전용 — 운영 환경 사용 금지)"
 echo "=============================================================="
+
+# ---------- 0. 대상 레지스트리 주소 ----------
+# 개발 PC: localhost:5000 / 사무실·실서버: servicetech2-registry:5000 (hosts 등록 필요)
+echo
+ask "대상 레지스트리 주소 (호스트:포트)" "${REGISTRY_ADDR:-localhost:5000}"
+LOCAL_REGISTRY="$REPLY"
 
 # ---------- 1. DB 종류 ----------
 echo

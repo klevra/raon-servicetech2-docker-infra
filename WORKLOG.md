@@ -107,3 +107,17 @@
 - 현재 Docker 버전 확인: **24.0.9**.
 - 28/29로의 업그레이드 영향도를 웹 검색으로 조사(출처는 PRD 대화 참고): **Docker 29는 API 최소 버전이 1.41→1.44로 상향**되어 24.x 클라이언트와 호환 깨짐, containerd 이미지 스토어가 기본값이 되며 `docker push` 매니페스트 형식도 변경됨. **28은 API 호환 유지되어 리스크 낮음.**
 - **결정**: 24 → 28로 먼저 업그레이드하여 검증 후, 이후 별도로 29 진행. 절차서는 [registry-server/docker-upgrade-24-to-28.md](registry-server/docker-upgrade-24-to-28.md) 참고. (아직 실제 서버에서 실행 전 — 사용자가 직접 실행 예정)
+
+### GitHub 저장소 연동 (RULES.md 7번 규칙 신설)
+- 프로젝트를 GitHub에 등록하기로 결정. **저장소**: `raon-servicetech2-docker-infra` (private) — https://github.com/klevra/raon-servicetech2-docker-infra
+- 신규 규칙: WORKLOG.md는 저장소에 포함(추적)하되, **WORKLOG.md만 변경되고 실질적 변경사항이 없으면 커밋/푸시하지 않음** — 로그만 있는 커밋으로 히스토리가 지저분해지는 것 방지. 실질적 변경이 있으면 매번 묻지 않고 자동 commit+push (지속적 승인으로 간주). 상세는 [RULES.md](RULES.md) 7번 참고.
+- 진행 과정: GitHub CLI(`gh`) 미설치 확인 → `winget`으로 설치 → 사용자가 직접 `gh auth login`으로 브라우저 인증 → `git init -b main` + `.gitignore`/`.gitattributes` 작성(로컬 설정 파일, 배포 임시 스테이징 폴더, 자동생성 `.env` 등 제외) → 초기 커밋(19개 파일) → `gh repo create --private --push`로 저장소 생성과 동시에 push 완료.
+- **상태**: ✅ 완료. 이 로그 항목 자체는 위 규칙에 따라 다음 실질 변경 시점에 같이 커밋됨(별도 즉시 push 안 함).
+
+### 사무실 PC로 작업 환경 이관 준비
+- 배경: 지금까지 작업하던 PC는 사용자 개인 메인 PC이고, 실제 작업은 사무실 PC에서 진행될 예정.
+- 결정: 사무실 PC에서는 이 PC의 로컬 레지스트리(`localhost:5000`)를 별도로 재구축하지 않고, 이미 구축해 둔 **사내 Linux 레지스트리(`servicetech2-registry`)만 사용**.
+- **스크립트 변경**: `oracle/base/build-and-push.sh(.ps1)`, `oracle/deploy/deploy.sh(.ps1)` 4개 파일에서 레지스트리 주소(`localhost:5000`)가 하드코딩되어 있던 것을 **대화형 입력(+ `REGISTRY_ADDR` 환경변수로 기본값 오버라이드 가능)** 방식으로 변경 — 같은 스크립트를 이 PC(localhost:5000)와 사무실 PC(servicetech2-registry:5000) 양쪽에서 그대로 재사용 가능해짐.
+- 변경 후 `build-and-push.sh`로 프롬프트/기본값 동작 재검증(정상). 다만 검증 도중 이 PC의 Docker Desktop 데몬 자체가 응답 없음 상태가 되어 최종 push까지는 확인 못 함 — 스크립트 로직 자체는 문제없음, 데몬 재시작 후 재확인 필요.
+- 사무실 PC에서 그대로 따라 할 수 있는 온보딩 체크리스트를 [OFFICE-SETUP.md](OFFICE-SETUP.md)로 작성 (저장소 클론, `gh auth login`, hosts/insecure-registries 설정, Oracle Auth Token 재발급 필요성, VSCode Remote Control 토글 등 이관되지 않는 설정 안내 포함).
+- **상태**: 스크립트 변경 및 가이드 문서 작성 완료. 사무실 PC에서의 실제 실행/검증은 사용자가 진행 예정.
