@@ -1,0 +1,18 @@
+# 로컬 프라이빗 Docker Registry (servicetech2)
+# - 로컬(localhost) 전용, 외부 노출 금지
+# - 인증/TLS 미적용 (Docker가 localhost는 자동으로 insecure registry로 허용하는 특례를 사용)
+services:
+  registry:
+    image: registry:2
+    container_name: servicetech2-registry
+    restart: always
+    ports:
+      - "${REGISTRY_PORT:-5000}:5000"
+    environment:
+      # 테스트 환경 편의를 위해 태그 삭제(REST API)를 허용
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:

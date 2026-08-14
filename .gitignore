@@ -1,0 +1,12 @@
+# 로컬 전용 설정 (VSCode 확장 등, 사람/머신마다 다를 수 있음)
+.claude/settings.local.json
+
+# 실행 시 자동 생성되는 환경설정 (예시 파일은 .env.example로 추적)
+oracle/registry/.env
+
+# 배포 스크립트가 실행 중 생성하는 임시 스테이징 폴더
+oracle/deploy/.staging/
+
+# OS/에디터 잡동사니
+.DS_Store
+Thumbs.db
