@@ -44,7 +44,9 @@
 | 4 | 계정 정보(ID/PW) | 배포 시점, 변수 | 없음(필수 입력) | **이미지에 절대 베이킹하지 않음**, `docker run -e`로만 주입 |
 | 5 | DDL SQL 파일 경로 | 배포 시점, 변수 | 없음(선택 입력) | 호스트 폴더 경로, 바인드마운트 |
 | 6 | 초기데이터 DML SQL 파일 경로 | 배포 시점, 변수 | 없음(선택 입력) | 호스트 폴더 경로, 바인드마운트, **DDL 이후 실행 보장** |
-| 7 | 포트 | 배포 시점, 변수 | 리스너 1521 / EM Express 5500(EE만) | 대화형 입력, 미입력 시 기본값 |
+| 7 | 포트 | 배포 시점, 변수 | 리스너 1521 | 대화형 입력, 미입력 시 기본값 (EM Express는 사용하지 않기로 결정, 미노출) |
+| 8 | 애플리케이션 계정 (선택) | 배포 시점, 변수 | 생성함(y) / 이름 `APPUSER` / 비번 미입력 시 랜덤 생성 / 접속방식 Service Name | SYS/SYSTEM과 별도 계정. 생성 시 `CREATE USER` + `GRANT ALL PRIVILEGES`를 `01_` 접두어 SQL로 자동 스테이징해 DDL(`10_`)/DML(`50_`)보다 먼저 실행되도록 보장. **접속 방식 2가지 선택 가능**: (1) Service Name — PDB로 `ALTER SESSION SET CONTAINER`, DBeaver에서 Service Name=PDB명으로 접속(권장) (2) SID — CDB 루트에 `"_ORACLE_SCRIPT"=true`로 생성, DBeaver에서 SID=인스턴스 SID로 접속 |
+| 9 | 접속 IP 제한 | 설계 원칙(변수 아님) | 제한 없음 | `docker run -p`가 호스트IP 미지정(0.0.0.0 바인딩)이고, Oracle 인증은 MySQL과 달리 계정이 host에 종속되지 않으므로 별도 sqlnet.ora ACL/Valid Node Checking을 추가하지 않음. 로컬 테스트 목적상 의도적 설계 — 외부 노출 시 재검토 필요 |
 
 ## 5. 시스템 아키텍처
 
@@ -105,7 +107,7 @@ localhost:5000/servicetech2/oracle:18c-xe
     - 스크립트가 임시 스테이징 폴더 생성 → DDL 경로의 파일들을 `10_` 접두어로 복사, DML 경로의 파일들을 `50_` 접두어로 복사
     - 스테이징 폴더 하나를 `/opt/oracle/scripts/setup`에 `-v`로 마운트
     - Dockerfile 수정 없이 순서(DDL → DML) 보장
-  - **포트 처리**: 리스너 포트 대화형 입력(기본 1521), EE 선택 시 EM Express 포트도 별도 입력(기본 5500). 기존 `install-oracle.sh/.ps1`에 이미 구현된 `port_in_use` 방식(실행 중 컨테이너의 포트와 충돌 여부 사전 경고)을 그대로 재사용
+  - **포트 처리**: 리스너 포트 대화형 입력(기본 1521)만 사용. EM Express(5500)는 관리 콘솔 용도로 필수가 아니라 판단해 제외. 기존 `install-oracle.sh/.ps1`에 이미 구현된 `port_in_use` 방식(실행 중 컨테이너의 포트와 충돌 여부 사전 경고)을 그대로 재사용
 
 ## 7. 보안 설계 원칙
 
@@ -125,7 +127,7 @@ localhost:5000/servicetech2/oracle:18c-xe
 |---|---|---|
 | `/opt/oracle/scripts/setup` 단일 평면 폴더 + 접두어 방식 | ✅ **실제 검증 완료 (2026-08-13)** | 19c EE 배포로 종단간 테스트: DDL(`10_` 접두어) → DML(`50_` 접두어) 순서대로 정상 자동실행됨 (`Table created.` → `1 row created. Commit complete.` 로그로 확인) |
 | Windows Git Bash(MSYS)의 `-v` 바인드마운트 경로 오염 | ✅ **버그 발견 및 수정 완료 (2026-08-13)** | MSYS가 `-v SRC:DEST:MODE` 인자 안의 `/`로 시작하는 부분을 전부 Windows 경로로 잘못 변환(호스트·컨테이너 경로 모두 오염) → 마운트가 빈 폴더로 뜸. `export MSYS_NO_PATHCONV=1`로 해결, `deploy.sh`/`install-oracle.sh`에 반영함 |
-| setup SQL 스크립트의 실행 계정 | ✅ **확인 완료 (2026-08-13)** | Oracle 공식 이미지의 setup 단계는 `sqlplus "/ as sysdba"`로 실행되어, DDL/DML 파일 안에서 스키마를 명시하지 않으면 **객체가 SYS 스키마 소유가 됨**. 특정 앱 스키마 소유로 만들려면 SQL 파일 안에서 `CREATE USER`/스키마 지정을 직접 해야 함 |
+| setup SQL 스크립트의 실행 계정 | ✅ **해결 완료 (2026-08-21)** | Oracle 공식 이미지의 setup 단계는 `sqlplus "/ as sysdba"`로 실행되어, DDL/DML 파일 안에서 스키마를 명시하지 않으면 객체가 SYS 스키마 소유가 되는 문제가 있었음 → **8번 항목(애플리케이션 계정) 추가로 해결**: `deploy.sh/.ps1`이 `CREATE USER` + `GRANT ALL PRIVILEGES`를 `01_` 접두어로 자동 생성해 DDL/DML보다 먼저 실행하므로, 이후 DDL 파일에서 해당 계정으로 명시적으로 객체를 만들면 SYS 소유를 피할 수 있음 |
 | gvenzl(XE) 이미지의 `/opt/oracle/scripts/setup` 동작 일치 여부 | 미검증 | EE와 동일한 규칙을 따르는 것으로 알려져 있으나, 실제 XE 경로로 배포 테스트는 아직 진행 전 |
 | Oracle 계정 인증(Auth Token)의 만료/재발급 주기 | 미검증 | 베이스 이미지 빌드 스크립트가 매번 새 로그인을 요구할지, 캐시된 자격증명으로 충분할지는 실행 환경(Docker credential store 유지 여부)에 따라 달라짐 |
 

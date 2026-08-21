@@ -18,6 +18,17 @@ Set-Location $ScriptDir
 $RegistryHost = "container-registry.oracle.com"
 $Namespace = "servicetech2"
 
+# .env가 있으면 ORACLE_REGISTRY_USER / ORACLE_AUTH_TOKEN을 읽어온다 (없으면 나중에 직접 입력받음).
+# .env는 .gitignore에 등록되어 있으며, 토큰은 절대 커밋되지 않는다.
+$EnvFile = Join-Path $ScriptDir ".env"
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$') {
+            Set-Item -Path "env:$($Matches[1])" -Value $Matches[2]
+        }
+    }
+}
+
 function Write-Info($msg)  { Write-Host "[정보] $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)    { Write-Host "[완료] $msg" -ForegroundColor Green }
 function Write-Warn2($msg) { Write-Host "[경고] $msg" -ForegroundColor Yellow }
@@ -34,6 +45,12 @@ function Ask([string]$Prompt, [string]$Default = "") {
 }
 
 function Ask-Secret([string]$Prompt) {
+    # Read-Host -AsSecureString는 실제 콘솔에서만 동작하며, 표준입력이 파일/파이프로
+    # 리다이렉트된 상황(자동화·비대화형 실행)에서는 무한 대기(hang)한다.
+    # 이런 경우를 감지해 일반 Read-Host(파이프 입력도 정상 처리)로 자동 전환한다.
+    if ([Console]::IsInputRedirected) {
+        return Read-Host "$Prompt"
+    }
     $secure = Read-Host "$Prompt" -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try {
@@ -48,7 +65,8 @@ Write-Host " Oracle 베이스 이미지 빌드 + servicetech2 레지스트리 �
 Write-Host "=============================================================="
 
 # 개발 PC: localhost:5000 (이 PC에서 만든 로컬 레지스트리)
-# 사무실/실서버: servicetech2-registry:5000 (hosts 파일 등록 필요, registry-server/linux-registry-setup.md 참고)
+# 팀서버(new-servicetech2-1, 192.168.0.168): servicetech2:5000
+# (hosts 파일 등록 + insecure-registry 등록 필요, registry-server/linux-registry-setup.md 참고)
 Write-Host ""
 $envDefault = if ($env:REGISTRY_ADDR) { $env:REGISTRY_ADDR } else { "localhost:5000" }
 $LocalRegistry = Ask "대상 레지스트리 주소 (호스트:포트)" $envDefault
@@ -106,12 +124,20 @@ if ($NeedsLogin) {
         Write-Host "   2) Database > enterprise 리포지터리 라이선스 동의(Continue)"
         Write-Host "   3) 계정 아이콘 > Auth Token 메뉴에서 토큰 발급"
         Write-Host ""
-        Read-Host "위 단계를 완료했으면 Enter를 눌러 계속하세요"
-        $OracleUser = Ask "Oracle 계정 이메일(Username)"
-        $AuthToken = Ask-Secret "Auth Token"
+
+        if ($env:ORACLE_REGISTRY_USER -and $env:ORACLE_AUTH_TOKEN) {
+            Write-Ok ".env에서 계정($($env:ORACLE_REGISTRY_USER))과 토큰을 읽었습니다. 대화형 입력을 건너뜁니다."
+            $OracleUser = $env:ORACLE_REGISTRY_USER
+            $AuthToken = $env:ORACLE_AUTH_TOKEN
+        } else {
+            Read-Host "위 단계를 완료했으면 Enter를 눌러 계속하세요"
+            $OracleUser = Ask "Oracle 계정 이메일(Username)" $env:ORACLE_REGISTRY_USER
+            $AuthToken = Ask-Secret "Auth Token"
+        }
+
         $AuthToken | docker login $RegistryHost --username $OracleUser --password-stdin
         if ($LASTEXITCODE -ne 0) {
-            Write-Err2 "로그인 실패. Auth Token 또는 라이선스 동의 상태를 다시 확인하세요."
+            Write-Err2 "로그인 실패. Auth Token 또는 라이선스 동의 상태를 다시 확인하세요. (.env의 ORACLE_AUTH_TOKEN이 비어있지 않은지도 확인)"
             exit 1
         }
         $AuthToken = $null

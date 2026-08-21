@@ -9,8 +9,12 @@
 # 대화형으로 아래 항목을 입력받습니다:
 #   1) DB 종류 (현재 Oracle 고정)   2) Oracle 버전(레지스트리 태그)
 #   3) 스키마(SID/PDB)              4) 계정 정보(SYS/SYSTEM 비밀번호)
-#   5) DDL SQL 파일 경로             6) 초기데이터 DML SQL 파일 경로
-#   7) 포트 (리스너, EE는 EM Express 포함)
+#   5) 애플리케이션 계정(선택)      6) DDL SQL 파일 경로
+#   7) 초기데이터 DML SQL 파일 경로  8) 포트 (리스너)
+#
+# 접속 IP 제한: 이 프로젝트는 sqlnet.ora 등에 별도 Valid Node Checking/ACL을 추가하지
+# 않으며, docker run -p 도 호스트IP 미지정(0.0.0.0 바인딩)이라 기본적으로 접속 IP
+# 제한이 없습니다. Oracle 인증은 MySQL과 달리 계정이 특정 host에 종속되지 않습니다.
 #
 # 데이터는 휘발성(볼륨 미사용)입니다. 비밀번호/토큰은 어떤 파일에도 저장하지 않습니다.
 # ============================================================================
@@ -61,13 +65,24 @@ port_in_use() {
   docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":${port}->"
 }
 
+gen_random_password() {
+  # 대/소문자+숫자를 각각 포함하는 16자 랜덤 비밀번호 생성 (Oracle 복잡도 규칙 충족)
+  printf '%s%s%s%s' \
+    "$(LC_ALL=C tr -dc 'A-Z' </dev/urandom | head -c 3)" \
+    "$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 3)" \
+    "$(LC_ALL=C tr -dc '0-9' </dev/urandom | head -c 3)" \
+    "$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 7)"
+}
+
 echo "=============================================================="
 echo " Oracle 테스트 인스턴스 배포 (servicetech2 레지스트리 기반)"
 echo " (테스트/개발/데모 목적 전용 — 운영 환경 사용 금지)"
 echo "=============================================================="
 
 # ---------- 0. 대상 레지스트리 주소 ----------
-# 개발 PC: localhost:5000 / 사무실·실서버: servicetech2-registry:5000 (hosts 등록 필요)
+# 개발 PC: localhost:5000 / 팀서버(new-servicetech2-1, 192.168.0.168): servicetech2:5000
+# (팀서버 접속 전 각 PC에서 사전 준비 필요 — hosts 등록 + insecure-registry 등록:
+#  registry-server/linux-registry-setup.md 참고)
 echo
 ask "대상 레지스트리 주소 (호스트:포트)" "${REGISTRY_ADDR:-localhost:5000}"
 LOCAL_REGISTRY="$REPLY"
@@ -86,9 +101,9 @@ DB_KIND="oracle"
 # ---------- 2. Oracle 버전(레지스트리 태그) ----------
 echo
 echo "배포할 Oracle 버전(레지스트리 태그)을 선택하세요:"
-echo "  1) 19c  (Enterprise Edition — SID 임의 지정 가능, EM Express 포함)"
-echo "  2) 21c-xe  (Express Edition — SID 고정(XE), EM Express 없음)"
-echo "  3) 18c-xe  (Express Edition — SID 고정(XE), EM Express 없음)"
+echo "  1) 19c  (Enterprise Edition — SID 임의 지정 가능)"
+echo "  2) 21c-xe  (Express Edition — SID 고정(XE))"
+echo "  3) 18c-xe  (Express Edition — SID 고정(XE))"
 ask "번호 선택" "1"
 case "$REPLY" in
   1) TAG="19c"; IS_EE=1 ;;
@@ -148,10 +163,51 @@ CHARSET="$REPLY"
 # ---------- 5. 계정 정보 ----------
 echo
 warn "SYS/SYSTEM 비밀번호는 화면에 표시되지 않으며, 어떤 파일에도 저장하지 않습니다."
-ask_secret "SYS/SYSTEM 초기 비밀번호"
+ask_secret "SYS/SYSTEM 초기 비밀번호 (비우면 랜덤 비밀번호 자동 생성)"
 DB_PASSWORD="$REPLY"
-if [[ ${#DB_PASSWORD} -lt 8 ]]; then
+GENERATED_PW=0
+if [[ -z "$DB_PASSWORD" ]]; then
+  DB_PASSWORD="$(gen_random_password)"
+  GENERATED_PW=1
+  ok "비밀번호를 입력하지 않아 랜덤 비밀번호를 생성했습니다 (아래 실행 요약과 접속 정보에 표시됩니다. 파일에는 저장하지 않습니다)."
+elif [[ ${#DB_PASSWORD} -lt 8 ]]; then
   warn "8자 미만입니다. Oracle 권장 규칙(8자 이상, 대/소문자+숫자 포함)을 벗어나면 생성 중 경고가 뜨지만 보통 생성은 계속 진행됩니다."
+fi
+
+# ---------- 5.5 애플리케이션 계정 (SID/PDB 접근용, SYS/SYSTEM과 별도) ----------
+echo
+info "SYS/SYSTEM은 관리자 계정입니다. 애플리케이션에서 쓸 별도 계정을 만들고 싶다면 아래에서 생성하세요."
+APP_USER=""
+APP_PASSWORD=""
+APP_GENERATED_PW=0
+APP_CONNECT_MODE="service"
+APP_CONNECT_DB=""
+APP_CONNECT_LABEL=""
+if confirm "애플리케이션 계정을 생성할까요? (생성 시 ALL PRIVILEGES 부여)"; then
+  ask "애플리케이션 계정 이름" "APPUSER"
+  APP_USER="$REPLY"
+  ask_secret "애플리케이션 계정 비밀번호 (비우면 랜덤 비밀번호 자동 생성)"
+  APP_PASSWORD="$REPLY"
+  if [[ -z "$APP_PASSWORD" ]]; then
+    APP_PASSWORD="$(gen_random_password)"
+    APP_GENERATED_PW=1
+    ok "애플리케이션 계정 비밀번호를 자동 생성했습니다 (아래 실행 요약과 접속 정보에 표시됩니다)."
+  fi
+
+  echo
+  echo "접속 방식을 선택하세요:"
+  echo "  1) Service Name (PDB 안에 생성, 권장 — DBeaver 'Service Name'으로 접속)"
+  echo "  2) SID (CDB 루트에 생성 — DBeaver 'SID'로 접속, PDB 격리 없이 루트 컨테이너에 직접 생성)"
+  ask "번호 선택" "1"
+  if [[ "$REPLY" == "2" ]]; then
+    APP_CONNECT_MODE="sid"
+    APP_CONNECT_DB="$([[ "$IS_EE" -eq 1 ]] && echo "$ORACLE_SID_VAL" || echo "XE")"
+    APP_CONNECT_LABEL="SID"
+  else
+    APP_CONNECT_MODE="service"
+    APP_CONNECT_DB="$SERVICE_NAME"
+    APP_CONNECT_LABEL="Service Name"
+  fi
 fi
 
 # ---------- 6. DDL / DML SQL 경로 ----------
@@ -163,9 +219,35 @@ DML_DIR="$REPLY"
 
 STAGING_DIR="${SCRIPT_DIR}/.staging/${CONTAINER_NAME}/setup"
 SETUP_MOUNT=0
-if [[ -n "$DDL_DIR" || -n "$DML_DIR" ]]; then
+if [[ -n "$APP_USER" || -n "$DDL_DIR" || -n "$DML_DIR" ]]; then
   rm -rf "${SCRIPT_DIR}/.staging/${CONTAINER_NAME}"
   mkdir -p "$STAGING_DIR"
+  if [[ -n "$APP_USER" ]]; then
+    if [[ "$APP_CONNECT_MODE" == "sid" ]]; then
+      cat > "${STAGING_DIR}/01_create_app_user.sql" <<SQL
+-- servicetech2 배포 스크립트 자동 생성 (테스트/개발 전용 — ALL PRIVILEGES는 운영 환경에 부적합)
+-- SID 방식: CDB 루트에 직접 생성한다. 루트에서는 C## 접두어 없는 계정명이 기본적으로
+-- 거부되므로(ORA-65096) "_ORACLE_SCRIPT"=true로 그 제약을 우회한다(컨테이너 스크립트 표준 기법).
+-- 계정명은 따옴표 없이 생성 -- Oracle 기본 규칙대로 자동 대문자 변환되어, SYSTEM/SYS와 동일하게
+-- 대소문자 구분 없이(DBeaver 등에서 따옴표 없이 입력해도) 접속 가능해진다.
+ALTER SESSION SET "_ORACLE_SCRIPT"=true;
+CREATE USER ${APP_USER} IDENTIFIED BY "${APP_PASSWORD}";
+GRANT ALL PRIVILEGES TO ${APP_USER};
+SQL
+    else
+      cat > "${STAGING_DIR}/01_create_app_user.sql" <<SQL
+-- servicetech2 배포 스크립트 자동 생성 (테스트/개발 전용 — ALL PRIVILEGES는 운영 환경에 부적합)
+-- Service Name 방식: 커스텀 setup 스크립트는 기본적으로 CDB 루트에서 실행되므로, PDB로
+-- 컨테이너를 전환해야 C## 접두어 없는 일반 계정명을 만들 수 있다 (안 하면 ORA-65096).
+-- 계정명은 따옴표 없이 생성 -- Oracle 기본 규칙대로 자동 대문자 변환되어, SYSTEM/SYS와 동일하게
+-- 대소문자 구분 없이(DBeaver 등에서 따옴표 없이 입력해도) 접속 가능해진다.
+ALTER SESSION SET CONTAINER = "${SERVICE_NAME}";
+CREATE USER ${APP_USER} IDENTIFIED BY "${APP_PASSWORD}";
+GRANT ALL PRIVILEGES TO ${APP_USER};
+SQL
+    fi
+    ok "애플리케이션 계정 생성 SQL을 스테이징했습니다 (01_ 접두어, DDL/DML보다 먼저 실행됨, 접속 방식: ${APP_CONNECT_LABEL})"
+  fi
   if [[ -n "$DDL_DIR" ]]; then
     if [[ -d "$DDL_DIR" ]]; then
       i=1
@@ -202,10 +284,6 @@ LISTENER_PORT="$REPLY"
 if port_in_use "$LISTENER_PORT"; then
   warn "포트 ${LISTENER_PORT}은(는) 이미 사용 중인 것으로 보입니다."
 fi
-if [[ "$IS_EE" -eq 1 ]]; then
-  ask "EM Express(관리 콘솔) 포트" "5500"
-  EM_PORT="$REPLY"
-fi
 
 # ---------- 최종 확인 ----------
 echo
@@ -219,10 +297,31 @@ else
 fi
 echo " 문자셋        : $CHARSET"
 echo " 리스너 포트   : $LISTENER_PORT"
-[[ "$IS_EE" -eq 1 ]] && echo " EM 포트       : $EM_PORT"
+echo " ---------------------------------------------------------"
+echo " [관리자] 계정 : SYSTEM  (SYS도 동일 비밀번호, Role=SYSDBA로 접속 시 사용)"
+echo " [관리자] URL  : jdbc:oracle:thin:@localhost:${LISTENER_PORT}/${SERVICE_NAME}  (PDB 기준 고정)"
+echo "               (DBeaver 'Database/Service Name' 필드에는 SID가 아니라 '${SERVICE_NAME}'을 입력)"
+if [[ -n "$APP_USER" ]]; then
+  if [[ "$APP_CONNECT_MODE" == "sid" ]]; then
+    APP_JDBC_URL="jdbc:oracle:thin:@localhost:${LISTENER_PORT}:${APP_CONNECT_DB}"
+  else
+    APP_JDBC_URL="jdbc:oracle:thin:@localhost:${LISTENER_PORT}/${APP_CONNECT_DB}"
+  fi
+  echo " ---------------------------------------------------------"
+  echo " [앱]   계정   : $APP_USER  (ALL PRIVILEGES)"
+  echo " [앱]   접속방식: ${APP_CONNECT_LABEL} = ${APP_CONNECT_DB}"
+  echo " [앱]   URL    : ${APP_JDBC_URL}"
+else
+  echo " ---------------------------------------------------------"
+  echo " [앱]   계정   : (생성 안 함, SYSTEM으로만 접속)"
+fi
+echo " ---------------------------------------------------------"
+echo " 접속 IP 제한  : 없음 (0.0.0.0 바인딩, Oracle 계정은 host에 종속되지 않음)"
 echo " DDL 경로      : ${DDL_DIR:-(없음)}"
 echo " DML 경로      : ${DML_DIR:-(없음)}"
 echo " 데이터        : 휘발성(볼륨 미사용)"
+[[ "$GENERATED_PW" -eq 1 ]] && echo " 생성된 비밀번호(SYSTEM) : $DB_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
+[[ "$APP_GENERATED_PW" -eq 1 ]] && echo " 생성된 비밀번호(${APP_USER}): $APP_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
 echo "==========================================================="
 if ! confirm "위 설정으로 컨테이너를 생성할까요?"; then
   err "사용자가 취소했습니다."
@@ -231,7 +330,6 @@ fi
 
 # ---------- docker run 구성 ----------
 RUN_ARGS=(-d --name "$CONTAINER_NAME" -p "${LISTENER_PORT}:1521" --shm-size=1g)
-[[ "$IS_EE" -eq 1 ]] && RUN_ARGS+=(-p "${EM_PORT}:5500")
 [[ "$SETUP_MOUNT" -eq 1 ]] && RUN_ARGS+=(-v "${STAGING_DIR}:/opt/oracle/scripts/setup:ro")
 
 if [[ "$IS_EE" -eq 1 ]]; then
@@ -251,7 +349,6 @@ fi
 
 info "컨테이너를 실행합니다: $CONTAINER_NAME"
 docker run "${RUN_ARGS[@]}" "$DEPLOY_IMAGE"
-unset DB_PASSWORD
 
 # ---------- 기동 대기 ----------
 info "DB 초기화를 기다리는 중입니다 (에디션에 따라 2~20분 소요될 수 있습니다)..."
@@ -280,8 +377,31 @@ echo
 echo "======================= 접속 정보 ======================="
 echo " Host       : localhost"
 echo " Port       : $LISTENER_PORT"
-echo " Service    : $SERVICE_NAME"
-echo " 접속 예시  : sqlplus system/<입력한 비밀번호>@localhost:${LISTENER_PORT}/${SERVICE_NAME}"
-[[ "$IS_EE" -eq 1 ]] && echo " EM Express : https://localhost:${EM_PORT}/em"
+echo " -------------------------- [관리자] --------------------------"
+echo " Service    : $SERVICE_NAME  (DBeaver 'Database/Service Name' 필드 — SID 아님, PDB 기준 고정)"
+echo " Username   : SYSTEM  (SYS도 동일 비밀번호, 접속 시 Role=SYSDBA 필요)"
+echo " JDBC URL   : jdbc:oracle:thin:@localhost:${LISTENER_PORT}/${SERVICE_NAME}"
+if [[ "$GENERATED_PW" -eq 1 ]]; then
+  echo " 접속 예시  : sqlplus system/${DB_PASSWORD}@localhost:${LISTENER_PORT}/${SERVICE_NAME}"
+else
+  echo " 접속 예시  : sqlplus system/<입력한 비밀번호>@localhost:${LISTENER_PORT}/${SERVICE_NAME}"
+fi
+if [[ -n "$APP_USER" ]]; then
+  if [[ "$APP_CONNECT_MODE" == "sid" ]]; then
+    APP_JDBC_URL="jdbc:oracle:thin:@localhost:${LISTENER_PORT}:${APP_CONNECT_DB}"
+  else
+    APP_JDBC_URL="jdbc:oracle:thin:@localhost:${LISTENER_PORT}/${APP_CONNECT_DB}"
+  fi
+  echo " ---------------------------- [앱] -----------------------------"
+  echo " 계정       : $APP_USER  (ALL PRIVILEGES)"
+  echo " DBeaver    : Connection Type = ${APP_CONNECT_LABEL}, Database = ${APP_CONNECT_DB}"
+  echo " JDBC URL   : ${APP_JDBC_URL}"
+  if [[ "$APP_GENERATED_PW" -eq 1 ]]; then
+    echo " 접속 예시  : sqlplus ${APP_USER}/${APP_PASSWORD}@localhost:${LISTENER_PORT}/${APP_CONNECT_DB}"
+  else
+    echo " 접속 예시  : sqlplus ${APP_USER}/<입력한 비밀번호>@localhost:${LISTENER_PORT}/${APP_CONNECT_DB}"
+  fi
+fi
 echo "==========================================================="
 warn "비밀번호/토큰은 어떤 파일에도 저장하지 않았습니다."
+unset DB_PASSWORD APP_PASSWORD

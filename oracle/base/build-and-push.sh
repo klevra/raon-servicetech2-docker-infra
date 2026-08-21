@@ -18,6 +18,15 @@ cd "$SCRIPT_DIR"
 REGISTRY_HOST="container-registry.oracle.com"
 NAMESPACE="servicetech2"
 
+# .env가 있으면 ORACLE_REGISTRY_USER / ORACLE_AUTH_TOKEN을 읽어온다 (없으면 나중에 직접 입력받음).
+# .env는 .gitignore에 등록되어 있으며, 토큰은 절대 커밋되지 않는다.
+if [[ -f ".env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source ".env"
+  set +a
+fi
+
 c_reset='\033[0m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_cyan='\033[36m'
 info()  { printf "${c_cyan}[정보]${c_reset} %s\n" "$1"; }
 ok()    { printf "${c_green}[완료]${c_reset} %s\n" "$1"; }
@@ -46,7 +55,8 @@ echo "=============================================================="
 
 # ---------- 0. 대상 레지스트리 주소 ----------
 # 개발 PC: localhost:5000 (이 PC에서 만든 로컬 레지스트리)
-# 사무실/실서버: servicetech2-registry:5000 (hosts 파일 등록 필요, registry-server/linux-registry-setup.md 참고)
+# 팀서버(new-servicetech2-1, 192.168.0.168): servicetech2:5000
+# (hosts 파일 등록 + insecure-registry 등록 필요, registry-server/linux-registry-setup.md 참고)
 echo
 ask "대상 레지스트리 주소 (호스트:포트)" "${REGISTRY_ADDR:-localhost:5000}"
 LOCAL_REGISTRY="$REPLY"
@@ -106,13 +116,21 @@ if [[ "$NEEDS_LOGIN" -eq 1 ]]; then
     echo "   2) Database > enterprise 리포지터리 라이선스 동의(Continue)"
     echo "   3) 계정 아이콘 > Auth Token 메뉴에서 토큰 발급"
     echo
-    read -r -p "위 단계를 완료했으면 Enter를 눌러 계속하세요..." _
-    ask "Oracle 계정 이메일(Username)" ""
-    ORACLE_USER="$REPLY"
-    ask_secret "Auth Token"
-    AUTH_TOKEN="$REPLY"
+
+    if [[ -n "${ORACLE_REGISTRY_USER:-}" && -n "${ORACLE_AUTH_TOKEN:-}" ]]; then
+      ok ".env에서 계정(${ORACLE_REGISTRY_USER})과 토큰을 읽었습니다. 대화형 입력을 건너뜁니다."
+      ORACLE_USER="$ORACLE_REGISTRY_USER"
+      AUTH_TOKEN="$ORACLE_AUTH_TOKEN"
+    else
+      read -r -p "위 단계를 완료했으면 Enter를 눌러 계속하세요..." _
+      ask "Oracle 계정 이메일(Username)" "${ORACLE_REGISTRY_USER:-}"
+      ORACLE_USER="$REPLY"
+      ask_secret "Auth Token"
+      AUTH_TOKEN="$REPLY"
+    fi
+
     if ! printf '%s' "$AUTH_TOKEN" | docker login "$REGISTRY_HOST" --username "$ORACLE_USER" --password-stdin; then
-      err "로그인 실패. Auth Token 또는 라이선스 동의 상태를 다시 확인하세요."
+      err "로그인 실패. Auth Token 또는 라이선스 동의 상태를 다시 확인하세요. (.env의 ORACLE_AUTH_TOKEN이 비어있지 않은지도 확인)"
       exit 1
     fi
     unset AUTH_TOKEN
