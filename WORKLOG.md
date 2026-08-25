@@ -239,3 +239,62 @@
 - IT팀 협의 불필요 (기술적으로 완전 해결)
 
 **상태**: ✅ 새로운 계획 완성. 외부 VM에서 Phase A부터 시작 가능
+
+---
+
+## 2026-08-25
+
+### 팀서버 방화벽 오픈 완료 + 클라이언트 접속 검증
+
+- 팀장님 승인 후 팀서버(`new-servicetech2-1`, `192.168.0.168`) 인바운드 5000/tcp 오픈 완료
+- 이 PC에서 포트 오픈·레지스트리 API 응답·hosts 별칭(`servicetech2`)·Docker `insecure-registries` 등록까지 전 구간 실제 검증
+  - 점검 중 hosts 파일에 예전 초안 이름(`servicetech2-registry`)이 남아있던 걸 발견했다가 재확인 결과 실제로는 `servicetech2`로 정상 등록돼 있었음(터미널 캐시 오류로 확인) — 혼선은 있었지만 실제 설정은 문제없었음
+  - `~/.docker/daemon.json`의 `insecure-registries`에 `servicetech2:5000` 항목이 빠져있던 것 발견, 추가
+
+### Oracle 19c EE 이미지 팀서버 레지스트리 등록 (네트워크 이슈 우회)
+
+- `oracle/base/build-and-push.ps1`으로 `servicetech2:5000`에 직접 push 시도 → 특정 레이어에서 반복적으로 `net/http: timeout awaiting response headers` 발생 (대용량 레이어를 실제 네트워크 너머로 push할 때만 발생, localhost 레지스트리에선 문제없었음)
+- 재시도할 때마다 이미 성공한 레이어는 `Already exists`로 건너뛰며 조금씩 진전은 있었으나 완주 실패
+- **우회 방법으로 전환**: `docker save`로 이미지를 tar 파일(3.4GB)로 저장 → `scp`(포트 220)로 팀서버에 직접 전송 → 팀서버에서 `docker load` → `docker tag` → `docker push localhost:5000/...`(서버 내부 자기 자신에게 push라 네트워크 타임아웃 없음) → 성공
+- 이 PC에서 `docker pull servicetech2:5000/servicetech2/oracle:19c`로 최종 검증 (digest 일치 확인)
+
+### 발견 및 수정한 버그 2건
+
+1. **`deploy.sh`/`.ps1`의 배포용 이미지 `docker build` 실패 감지 누락** — `build-and-push`엔 이미 있던 exit code 체크가 `deploy` 쪽엔 없어서, build 실패해도 "빌드 완료"로 잘못 표시되고 이후 `docker run`이 엉뚱한/오래된 이미지를 쓸 수 있었음. 수정 완료.
+2. **push 재검증 로직(`docker manifest inspect`)이 insecure 레지스트리에서 오탐** — push는 실제로 성공했는데(`curl`로 태그 조회 성공, `docker pull`도 성공) `docker manifest inspect`만 "no such manifest"라고 잘못 보고하는 것을 발견 (MariaDB 작업 중 재현). `oracle/base`, `mariadb/base` 양쪽 다 레지스트리 REST API(`/v2/.../tags/list`)를 직접 curl/Invoke-WebRequest로 조회하는 방식으로 교체.
+
+### deploy 스크립트 개선
+
+- "대상 레지스트리 주소" 기본값을 `localhost:5000` → 팀서버 IP `192.168.0.168:5000`으로 변경 (`oracle`, `mariadb` 양쪽)
+- 신규 기능: 실행 요약/접속 정보를 로그 파일로 저장할지 물어보는 옵션 추가 (기본값 n — 비밀번호가 평문 포함되므로 명시적 동의 필요), `*/deploy/logs/<컨테이너명>_<타임스탬프>.log`로 저장
+- 실행 요약/접속 정보에 DB 종류·버전(태그) 표시 추가
+
+### 팀서버 경유 실제 배포 종단간 검증 완료
+
+- `oracle/deploy/deploy.ps1`을 팀서버 레지스트리(`192.168.0.168:5000`) 대상으로 실행, 로컬 Oracle 이미지를 전부 삭제한 "완전히 새로 pull하는" 상태에서 검증
+- 애플리케이션 계정 Service Name 방식 / SID 방식 둘 다 실제 컨테이너 생성 + 로그인까지 성공 확인 (계정: `klevra`)
+- 검증 도중 이 PC가 메모리 부족(OOM)으로 두 차례 크래시 — 상세는 아래 "WSL2 메모리 이슈" 참고
+
+### WSL2 메모리 이슈 진단 및 해결
+
+- 컨테이너가 `Exited (137)`(SIGKILL, OOM-kill 시그니처)로 죽는 문제 발생. 원인 추적 결과 `.wslconfig`에 걸어뒀던 WSL2 메모리 상한(2GB)이 Oracle 인스턴스의 shared pool 요구치(권장 810MB)보다 여유가 없어 인스턴스 자체가 죽은 것으로 확인 (`DBT-11205` 경고 로그로 사전 확인됨)
+- `.wslconfig` 파일 삭제(WSL2 기본값 = 호스트 메모리의 50%, 최대 8GB로 복귀) 후 재배포 시 정상 완주 확인
+- 부수적으로 확인된 사실: `wsl --shutdown`만으로는 Docker Desktop이 새 WSL2 백엔드에 재연결이 안 되는 경우가 있고, **Docker Desktop 앱 자체의 완전 재시작**이 필요했음
+
+### MariaDB 배포 구조 신규 구축
+
+- 개인 Vault의 과거 MariaDB 구축 노트(Docker Desktop.md — `docker run` 예시 3종, `MARIADB_ROOT_PASSWORD`/`DATABASE`/`USER`/`PASSWORD`/`TZ` env 조합, 고정 IP `mdl` 네트워크 등)를 참고해, Oracle 스크립트 패턴과 결합한 `mariadb/base`, `mariadb/deploy` 신규 작성
+- 설계 결정(사용자 확인): 데이터는 Oracle과 동일하게 휘발성(볼륨 미사용), 네트워크도 Oracle처럼 단순 포트 매핑(예전의 `mdl` 고정 IP 브리지 네트워크는 채택 안 함)
+- MariaDB는 Oracle 대비 단순한 지점: 라이선스/Auth Token 불필요, SID/PDB 개념 없음(단일 DB), 앱 계정도 공식 이미지의 `MARIADB_USER`/`PASSWORD`만으로 자동 권한 부여(커스텀 SQL 불필요)
+- `mariadb/deploy/Dockerfile`에 `HEALTHCHECK`(`healthcheck.sh`) 직접 추가 — 공식 이미지엔 기본 지정이 없어서, Oracle과 동일한 `docker inspect .State.Health.Status` 폴링 루프를 그대로 재사용할 수 있게 함
+- 실제 배포로 pull → build → run → healthcheck → root/앱 계정(`appuser`) 로그인 및 권한(`GRANT ALL PRIVILEGES ON testdb.*`)까지 전부 검증 완료
+- 검증 중 발견: 최신 MariaDB 이미지엔 `mysql` 클라이언트 바이너리가 없고 `mariadb`만 존재 — 접속 예시 명령어 수정
+- 팀서버 레지스트리에 MariaDB 3개 태그(`latest`, `11.4`, `10.11`) 전부 push 완료
+
+### VSCode 메모리 사용량 진단
+
+- 작업관리자에서 VSCode가 메모리를 과다 점유하는 현상 확인 요청 → 프로세스 트리(`Get-CimInstance Win32_Process`)로 역할별 분해
+- 설치된 확장 중 `ms-python.python`/`debugpy`/`vscode-pylance`/`vscode-python-envs` 4종이 이 워크스페이스(순수 Docker/PowerShell 작업)에서 전혀 안 쓰이는데도 Pylance 언어서버(315MB)를 상시 구동 중인 것을 발견
+- 사용자가 4종 삭제 후 VSCode 재시작 → 프로세스 15개→11개, 총 메모리 2,426MB→1,968MB로 약 460MB 회수 확인 (확장 삭제 직후엔 이미 떠 있던 Pylance 프로세스가 재시작 전까지 안 죽는다는 점도 확인)
+
+**상태**: ✅ 팀서버 경유 Oracle/MariaDB 배포 파이프라인 전부 실제 검증 완료. 잔여 항목은 [TODO-TEAM-DEPLOY.md](TODO-TEAM-DEPLOY.md) 참고.
