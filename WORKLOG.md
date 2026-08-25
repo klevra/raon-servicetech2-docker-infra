@@ -298,3 +298,35 @@
 - 사용자가 4종 삭제 후 VSCode 재시작 → 프로세스 15개→11개, 총 메모리 2,426MB→1,968MB로 약 460MB 회수 확인 (확장 삭제 직후엔 이미 떠 있던 Pylance 프로세스가 재시작 전까지 안 죽는다는 점도 확인)
 
 **상태**: ✅ 팀서버 경유 Oracle/MariaDB 배포 파이프라인 전부 실제 검증 완료. 잔여 항목은 [TODO-TEAM-DEPLOY.md](TODO-TEAM-DEPLOY.md) 참고.
+
+### PowerShell 스크립트 한글 깨짐 버그 발생 및 복구
+
+- `mariadb/base/build-and-push.ps1`, `mariadb/deploy/deploy.ps1` 2개 파일이 `Write` 도구로 생성되며 BOM 없이 저장됨 → PowerShell 5.1이 BOM 없는 `.ps1`을 시스템 코드페이지(CP949)로 오독해 한글이 콘솔에서 깨져 표시되는 문제를 사용자가 실제 실행 중 발견
+- **1차 시도 실수**: `Get-Content -Raw`로 읽어서 BOM을 붙이려 했으나, 이 방식 자체가 BOM 없는 파일을 CP949로 오독하기 때문에 파일 내용(한글)이 영구히 깨져버림 — 즉시 인지하고 원본 내용을 `Write` 도구로 재작성해 복구
+- **최종 수정**: 텍스트 디코딩을 전혀 거치지 않고 바이트 단위(`ReadAllBytes` → `EF BB BF` 접두 → `WriteAllBytes`)로만 BOM을 추가하는 방식으로 안전하게 재작업. 이후 저장소 내 모든 `.ps1` 파일에 이 방식을 표준으로 적용
+- 사용자의 `D:\99_project\sandbox\mariadb\` 테스트 복사본도 수정본으로 재동기화, 이후 실제 재실행으로 한글 정상 출력 및 배포 전체 흐름(레지스트리 pull → 빌드 → 컨테이너 생성 → root/앱 계정 → healthcheck) 재검증 완료
+
+### DB 라이선스 조사: "라이선스 없이 만들 수 있는 DB" 분류
+
+- 제품이 지원하는 DB 목록(goldilocks/altibase/cubrid/db2/informix/mariadb/mssql/oracle/postgres/tibero/mysql) 중 Docker로 라이선스 부담 없이 구축 가능한 것을 웹 조사로 분류
+- **완전 오픈소스(라이선스 동의 불필요)**: MariaDB(완료), MySQL(GPL), PostgreSQL(완전 오픈소스), CUBRID(엔진 GPLv2+툴 BSD, NHN 오픈소스)
+- **무료지만 EULA 동의·운영 제한 있음**: Oracle XE(용량 제한, 비용은 없음), MSSQL(Developer/Express), Db2 Community Edition(Docker 이미지는 비운영 전용 명시), Informix Developer Edition(비운영 전용)
+- **사실상 불가(상용 라이선스 필수)**: Altibase(트라이얼 라이선스 파일 필요), Tibero(데모/유료 라이선스 필요 + hostname 바인딩), Goldilocks(공개 무료 배포 경로 확인 안 됨)
+- 결론: 1차로 MySQL/PostgreSQL/CUBRID 3종을 mariadb와 동일 패턴으로 구축하기로 결정
+
+### 스크립트 통합(최종 목표) 논의
+
+- 사용자가 "각 DB마다 따로 있는 deploy 스크립트를 하나로 통합"하는 것이 최종 목표 중 하나임을 명시, "잊지 말라"는 요청에 따라 별도 메모리로 기록
+- 논의된 구조안: `deploy/` 루트 아래 `common/`(공용 함수) + DB별 하위 폴더(`Dockerfile`+`logic.ps1`), 단일 진입점 스크립트가 DB 종류 선택 후 해당 로직을 dot-source하는 방식
+- 사용자 결정: "대다수의 DBMS를 처리하고 그 뒤에 생각하자" — 지금은 각 DB 스크립트를 개별 완성하는 데 집중하고, 통합 리팩터링은 이후 별도 작업으로 미룸
+
+### MySQL / PostgreSQL / CUBRID 배포 구조 신규 구축 및 실제 검증
+
+- 3종 모두 `oracle`/`mariadb`와 동일한 3단계(registry 공용 + base + deploy) 구조로 `.sh`/`.ps1`(BOM 포함)/`.bat` 전 스크립트 작성
+- **MySQL**: MariaDB와 거의 동일 (`MYSQL_ROOT_PASSWORD`/`MYSQL_DATABASE`/`MYSQL_USER`/`MYSQL_PASSWORD`). 공식 이미지에 `mysql` 클라이언트가 그대로 남아있어 MariaDB처럼 바이너리명을 바꿀 필요 없었음. HEALTHCHECK는 `mysqladmin ping` 직접 추가(공식 이미지에 기본 지정 없음)
+- **PostgreSQL**: 공식 이미지에 MariaDB의 `*_USER` 같은 보조계정 자동생성 기능이 없어, `CREATE USER`/`GRANT` SQL을 직접 생성해 `/docker-entrypoint-initdb.d/`에 `05_` 접두어로 주입(DDL `10_`/DML `50_`보다 먼저 실행되도록 순서 설계, `ALTER DEFAULT PRIVILEGES`로 향후 생성 테이블에도 권한 자동 적용). **실제 검증 중 발견한 함정**: PostgreSQL은 따옴표 없는 식별자를 소문자로 접지만, 접속 인증 파라미터(libpq startup packet의 user 필드)는 이 접힘이 전혀 적용되지 않는 별도 경로라서, 대문자 섞인 계정명을 그대로 쓰면 "생성된 이름"과 "접속해야 하는 이름"이 달라져 로그인 실패 — Oracle 대소문자 버그와 정반대 방향의 함정. 앱 계정명을 입력받는 즉시 소문자로 강제 변환해 원천 차단(스크립트 실행 테스트로 대문자 입력 → 소문자로 정상 변환·로그인 확인). HEALTHCHECK는 `pg_isready -h 127.0.0.1`로 TCP 연결을 강제해 초기화 스크립트 실행 중(유닉스 소켓만 열린 임시 상태)에 조기 성공으로 오판하지 않도록 설계
+- **CUBRID**: 사전 웹 조사 단계에서 문서마다 다른 정보(env var 이름, 포트 구성 등)가 나와, 실제 공식 이미지를 pull하여 `docker inspect`와 `entrypoint.sh` 원본을 직접 분석 + 실제 컨테이너 기동 테스트로 사실관계를 확정한 뒤 스크립트 작성. 확정된 사실: 지원 env는 `CUBRID_DB`/`CUBRID_USER`/`CUBRID_PASSWORD`/`CUBRID_VOLUME_SIZE`/`CUBRID_LOCALE`/`CUBRID_COMPONENTS`뿐이고 실제 노출 포트는 브로커용 `33000` 하나뿐(1523/8001/30000은 관련 문서에 나왔지만 실제 이미지엔 없음); `dba` 계정은 비밀번호를 설정하는 기능 자체가 이미지에 없어 항상 무password(이미지 자체 사양이며 이 프로젝트의 제약이 아님을 스크립트에 명시); 계정 인증은 대소문자를 구분하지 않음(테스트로 확인, PostgreSQL과 반대); `/docker-entrypoint-initdb.d/` 같은 DDL/DML 자동 실행 규칙이 없어 해당 기능은 지원하지 않는다고 명확히 표기. **11.4부터 `--privileged` 옵션이 공식 요구사항**이라는 점을 발견해 사용자에게 확인 후("privileged로 진행") 반영 — 이 프로젝트에서 유일하게 privileged 컨테이너로 뜨는 DB이며, 스크립트 요약 화면에 매번 명시적으로 경고하도록 처리
+- 3종 모두 `.sh`/`.ps1` 양쪽으로 실제 build-and-push → deploy → 관리자/앱 계정 로그인 및 권한(테이블 생성/INSERT) 검증까지 마친 뒤 테스트 컨테이너·이미지 삭제, 팀서버 레지스트리에는 `latest` 베이스 이미지만 남김
+- MySQL 베이스 이미지 push 중 대용량 레이어에서 `net/http: timeout awaiting response headers` 재현(Oracle 때와 동일 증상) — 이번엔 사용자가 직접 팀서버에 등록 완료, 이쪽에서는 `docker pull`로 digest 일치만 재검증. CUBRID는 동일 증상이 재시도 2회 만에 자체 해결됨
+
+**상태**: ✅ MySQL/PostgreSQL/CUBRID 3종 배포 파이프라인 전부 실제 검증 완료 및 팀서버 레지스트리 등록 완료. 완전 무료 오픈소스 DB(MariaDB/MySQL/PostgreSQL/CUBRID) 4종 전부 구축 완료. 잔여 항목: 스크립트 통합 리팩터링(보류 중), Oracle XE/MSSQL/Db2/Informix 등 "무료지만 제약 있는" DB군은 미착수.

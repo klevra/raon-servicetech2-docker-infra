@@ -1,6 +1,6 @@
 # TODO: 팀서버 레지스트리 배포 잔여 체크리스트
 
-- 작성일: 2026-08-21 / 최종 수정: 2026-08-25
+- 작성일: 2026-08-21 / 최종 수정: 2026-08-25 (MySQL/PostgreSQL/CUBRID 추가)
 - 목적: "팀서버 레지스트리 → 방화벽 오픈 → 이미지 등록 → 각 PC에서 스크립트로 원샷 배포" 최종 목표까지 남은 작업 정리
 - 관련 문서: [PHASE-D-FIREWALL-APPROVAL.md](PHASE-D-FIREWALL-APPROVAL.md), [registry-server/linux-registry-setup.md](registry-server/linux-registry-setup.md), [oracle/PRD.md](oracle/PRD.md)
 
@@ -14,13 +14,14 @@
 - [ ] (선택) 현재 레지스트리 인증 없음(사내망 신뢰 전제) — 필요 시 `REGISTRY_AUTH=htpasswd` 적용 검토 ([linux-registry-setup.md](registry-server/linux-registry-setup.md) 5절 참고)
 - [x] ~~Oracle 19c EE 베이스 이미지를 팀서버 레지스트리에 push~~ (2026-08-25 완료 — 네트워크 push는 반복 타임아웃 나서 `docker save`→`scp`→서버에서 `load`/`push` 방식으로 우회 성공. `oracle/base/build-and-push.*`로 직접 push 재시도는 여전히 타임아웃 날 수 있음, 안 되면 같은 우회법 사용)
 - [x] ~~MariaDB 베이스 이미지(latest/11.4/10.11) 팀서버 레지스트리에 push~~ (2026-08-25 완료, 이건 이미지가 작아서 직접 push로 문제없이 성공)
+- [x] ~~MySQL/PostgreSQL/CUBRID 베이스 이미지(각 latest) 팀서버 레지스트리에 push~~ (2026-08-25 완료. MySQL은 대용량 레이어 타임아웃이 나서 사용자가 직접 등록, PostgreSQL/CUBRID는 재시도로 자체 해결)
 
 ## 팀원 PC 각자 (담당: 팀원 개인)
 
 - [ ] hosts 파일에 `192.168.0.168  servicetech2` 등록
 - [ ] Docker `insecure-registries`에 `servicetech2:5000`**과** `192.168.0.168:5000` 둘 다 등록 후 Docker 재시작/Apply (스크립트 기본값이 IP라 IP 쪽도 꼭 등록해야 함, 2026-08-25 기준)
 - [ ] `curl http://servicetech2:5000/v2/` 또는 `http://192.168.0.168:5000/v2/` 로 연결 테스트 → `{}` 응답 확인
-- [ ] `oracle/deploy/deploy.ps1`(또는 `.sh`/`.bat`) 또는 `mariadb/deploy/deploy.ps1` 실행 → 레지스트리 주소는 기본값(Enter)이 이미 `192.168.0.168:5000`이라 그대로 진행하면 됨
+- [ ] `oracle/deploy/deploy.ps1`(또는 `.sh`/`.bat`) 또는 `mariadb`/`mysql`/`postgres`/`cubrid`의 `deploy.ps1` 실행 → 레지스트리 주소는 기본값(Enter)이 이미 `192.168.0.168:5000`이라 그대로 진행하면 됨 (CUBRID는 `--privileged`로 뜨니 사전에 인지할 것)
 
 상세 절차: [registry-server/linux-registry-setup.md](registry-server/linux-registry-setup.md)
 
@@ -30,12 +31,15 @@
 - [x] ~~애플리케이션 계정 생성 — SID 방식~~ (2026-08-21 로컬, 2026-08-25 팀서버 경유 재검증 완료)
 - [x] ~~팀서버 레지스트리를 경유한 `deploy.ps1` 종단간 배포 테스트~~ (2026-08-25 완료, Oracle 19c EE 기준)
 - [x] ~~MariaDB 신규 구축 + 팀서버 경유 배포 검증~~ (2026-08-25 완료 — root/앱 계정 로그인, 권한, HEALTHCHECK 전부 확인)
+- [x] ~~MySQL/PostgreSQL/CUBRID 신규 구축 + 배포 검증~~ (2026-08-25 완료 — 관리자/앱 계정 로그인, 권한(테이블 생성/INSERT), HEALTHCHECK 전부 확인. `.sh`/`.ps1` 양쪽 검증)
 
 ## 검증 남은 항목
 
 - [ ] gvenzl(XE) 이미지 경로(`21c-xe`/`18c-xe`)로 실제 배포 테스트 (아직 19c EE 경로만 검증됨 — [oracle/PRD.md](oracle/PRD.md) 리스크 항목 참고)
-- [ ] MariaDB DDL/DML(`/docker-entrypoint-initdb.d/`) 자동 실행 경로 실제 파일로 테스트 (지금까지는 DDL/DML 없이만 검증)
+- [ ] MariaDB/MySQL/PostgreSQL DDL/DML(`/docker-entrypoint-initdb.d/`) 자동 실행 경로 실제 파일로 테스트 (지금까지는 파일 없이 빈 경로로만 검증. CUBRID는 이 기능 자체가 없어 대상 아님)
 - [ ] 팀원 PC 1곳 이상에서 위 "팀원 PC 각자" 체크리스트 실제로 따라해보고 문서 미비점 확인
+- [ ] (신규, 낮은 우선순위) 각 DB별로 흩어진 `deploy.*` 스크립트를 하나의 통합 진입점으로 리팩터링 — 사용자가 "대다수의 DBMS를 처리하고 그 뒤에 생각하자"고 결정해 보류 중. 논의된 구조안은 WORKLOG.md 2026-08-25 "스크립트 통합(최종 목표) 논의" 절 참고
+- [ ] (신규) Oracle XE/MSSQL(Developer·Express)/Db2 Community Edition/Informix Developer Edition — "무료지만 EULA 동의·비운영 전용 제약 있음" 그룹, 아직 미착수 (조사만 완료, WORKLOG.md "DB 라이선스 조사" 절 참고)
 
 ## 참고: 2026-08-25 발견한 이슈 (환경 문제, 스크립트와 무관)
 
