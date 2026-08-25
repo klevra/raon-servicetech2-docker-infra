@@ -338,6 +338,10 @@ Write-Both " -------------------------- [관리자] --------------------------"
 Write-Both " Database   : $DbName"
 Write-Both " Username   : root"
 Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
+Write-Both " JDBC 옵션값: allowPublicKeyRetrieval=true, useSSL=false (위 URL에 이미 포함됨)"
+Write-Both " 드라이버 옵션(DBeaver 등 GUI 툴, URL 대신 직접 접속 시): Driver properties 탭에서"
+Write-Both "   allowPublicKeyRetrieval = true"
+Write-Both "   useSSL                 = false"
 if ($GeneratedPw) {
     Write-Both " 접속 예시  : mysql -h 127.0.0.1 -P $ListenerPort -u root -p$DbPassword $DbName"
 } else {
@@ -347,6 +351,10 @@ if ($AppUser) {
     Write-Both " ---------------------------- [앱] -----------------------------"
     Write-Both " 계정       : $AppUser  ($DbName DB에 전체 권한)"
     Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
+    Write-Both " JDBC 옵션값: allowPublicKeyRetrieval=true, useSSL=false (위 URL에 이미 포함됨)"
+    Write-Both " 드라이버 옵션(DBeaver 등 GUI 툴, URL 대신 직접 접속 시): Driver properties 탭에서"
+    Write-Both "   allowPublicKeyRetrieval = true"
+    Write-Both "   useSSL                 = false"
     if ($AppGeneratedPw) {
         Write-Both " 접속 예시  : mysql -h 127.0.0.1 -P $ListenerPort -u $AppUser -p$AppPassword $DbName"
     } else {

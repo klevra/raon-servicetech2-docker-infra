@@ -351,6 +351,10 @@ echo " -------------------------- [관리자] --------------------------"
 echo " Database   : $DB_NAME"
 echo " Username   : root"
 echo " JDBC URL   : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false"
+echo " JDBC 옵션값: allowPublicKeyRetrieval=true, useSSL=false (위 URL에 이미 포함됨)"
+echo " 드라이버 옵션(DBeaver 등 GUI 툴, URL 대신 직접 접속 시): Driver properties 탭에서"
+echo "   allowPublicKeyRetrieval = true"
+echo "   useSSL                 = false"
 if [[ "$GENERATED_PW" -eq 1 ]]; then
   echo " 접속 예시  : mysql -h 127.0.0.1 -P ${LISTENER_PORT} -u root -p${DB_PASSWORD} ${DB_NAME}"
 else
@@ -360,6 +364,10 @@ if [[ -n "$APP_USER" ]]; then
   echo " ---------------------------- [앱] -----------------------------"
   echo " 계정       : $APP_USER  (${DB_NAME} DB에 전체 권한)"
   echo " JDBC URL   : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false"
+  echo " JDBC 옵션값: allowPublicKeyRetrieval=true, useSSL=false (위 URL에 이미 포함됨)"
+  echo " 드라이버 옵션(DBeaver 등 GUI 툴, URL 대신 직접 접속 시): Driver properties 탭에서"
+  echo "   allowPublicKeyRetrieval = true"
+  echo "   useSSL                 = false"
   if [[ "$APP_GENERATED_PW" -eq 1 ]]; then
     echo " 접속 예시  : mysql -h 127.0.0.1 -P ${LISTENER_PORT} -u ${APP_USER} -p${APP_PASSWORD} ${DB_NAME}"
   else
