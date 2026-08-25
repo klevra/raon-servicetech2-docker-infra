@@ -273,11 +273,11 @@ echo " DB 이름       : $DB_NAME"
 echo " 포트          : $LISTENER_PORT"
 echo " ---------------------------------------------------------"
 echo " [관리자] 계정 : root"
-echo " [관리자] URL  : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}"
+echo " [관리자] URL  : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false"
 if [[ -n "$APP_USER" ]]; then
   echo " ---------------------------------------------------------"
   echo " [앱]   계정   : $APP_USER  (${DB_NAME} DB에 전체 권한)"
-  echo " [앱]   URL    : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}"
+  echo " [앱]   URL    : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false"
 else
   echo " ---------------------------------------------------------"
   echo " [앱]   계정   : (생성 안 함, root로만 접속)"
@@ -340,6 +340,9 @@ echo
 echo
 {
 echo "======================= 접속 정보 ======================="
+echo " (JDBC URL의 allowPublicKeyRetrieval/useSSL 옵션: MySQL 8+ 기본 인증방식(caching_sha2_password)이"
+echo "  SSL 없는 연결에서 RSA 공개키 교환을 요구하는데, DBeaver 등 JDBC 클라이언트는 보안상 이를 기본"
+echo "  차단합니다. 테스트 환경이라 이 옵션으로 명시 허용 — 운영 환경에서는 SSL을 구성하세요.)"
 echo " DB 종류    : $DB_KIND"
 echo " 버전(태그) : $TAG"
 echo " Host       : localhost"
@@ -347,7 +350,7 @@ echo " Port       : $LISTENER_PORT"
 echo " -------------------------- [관리자] --------------------------"
 echo " Database   : $DB_NAME"
 echo " Username   : root"
-echo " JDBC URL   : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}"
+echo " JDBC URL   : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false"
 if [[ "$GENERATED_PW" -eq 1 ]]; then
   echo " 접속 예시  : mysql -h 127.0.0.1 -P ${LISTENER_PORT} -u root -p${DB_PASSWORD} ${DB_NAME}"
 else
@@ -356,7 +359,7 @@ fi
 if [[ -n "$APP_USER" ]]; then
   echo " ---------------------------- [앱] -----------------------------"
   echo " 계정       : $APP_USER  (${DB_NAME} DB에 전체 권한)"
-  echo " JDBC URL   : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}"
+  echo " JDBC URL   : jdbc:mysql://localhost:${LISTENER_PORT}/${DB_NAME}?allowPublicKeyRetrieval=true&useSSL=false"
   if [[ "$APP_GENERATED_PW" -eq 1 ]]; then
     echo " 접속 예시  : mysql -h 127.0.0.1 -P ${LISTENER_PORT} -u ${APP_USER} -p${APP_PASSWORD} ${DB_NAME}"
   else

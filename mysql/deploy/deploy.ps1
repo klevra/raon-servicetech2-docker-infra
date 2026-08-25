@@ -262,11 +262,11 @@ Write-Both " DB 이름       : $DbName"
 Write-Both " 포트          : $ListenerPort"
 Write-Both " ---------------------------------------------------------"
 Write-Both " [관리자] 계정 : root"
-Write-Both " [관리자] URL  : jdbc:mysql://localhost:$ListenerPort/$DbName"
+Write-Both " [관리자] URL  : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
 if ($AppUser) {
     Write-Both " ---------------------------------------------------------"
     Write-Both " [앱]   계정   : $AppUser  ($DbName DB에 전체 권한)"
-    Write-Both " [앱]   URL    : jdbc:mysql://localhost:$ListenerPort/$DbName"
+    Write-Both " [앱]   URL    : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
 } else {
     Write-Both " ---------------------------------------------------------"
     Write-Both " [앱]   계정   : (생성 안 함, root로만 접속)"
@@ -327,6 +327,9 @@ Write-Host ""
 
 Write-Host ""
 Write-Both "======================= 접속 정보 ======================="
+Write-Both " (JDBC URL의 allowPublicKeyRetrieval/useSSL 옵션: MySQL 8+ 기본 인증방식(caching_sha2_password)이"
+Write-Both "  SSL 없는 연결에서 RSA 공개키 교환을 요구하는데, DBeaver 등 JDBC 클라이언트는 보안상 이를 기본"
+Write-Both "  차단합니다. 테스트 환경이라 이 옵션으로 명시 허용 -- 운영 환경에서는 SSL을 구성하세요.)"
 Write-Both " DB 종류    : $DbKind"
 Write-Both " 버전(태그) : $Tag"
 Write-Both " Host       : localhost"
@@ -334,7 +337,7 @@ Write-Both " Port       : $ListenerPort"
 Write-Both " -------------------------- [관리자] --------------------------"
 Write-Both " Database   : $DbName"
 Write-Both " Username   : root"
-Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName"
+Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
 if ($GeneratedPw) {
     Write-Both " 접속 예시  : mysql -h 127.0.0.1 -P $ListenerPort -u root -p$DbPassword $DbName"
 } else {
@@ -343,7 +346,7 @@ if ($GeneratedPw) {
 if ($AppUser) {
     Write-Both " ---------------------------- [앱] -----------------------------"
     Write-Both " 계정       : $AppUser  ($DbName DB에 전체 권한)"
-    Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName"
+    Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
     if ($AppGeneratedPw) {
         Write-Both " 접속 예시  : mysql -h 127.0.0.1 -P $ListenerPort -u $AppUser -p$AppPassword $DbName"
     } else {
