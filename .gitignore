@@ -7,15 +7,15 @@
 oracle/registry/.env
 oracle/base/.env
 
-# 배포 스크립트가 실행 중 생성하는 임시 스테이징 폴더
-oracle/deploy/.staging/
+# 배포 스크립트가 실행 중 생성하는 임시 스테이징 폴더 (oracle/deploy, mariadb/deploy 등 공통)
+**/deploy/.staging/
 
 # 실행 로그/테스트용 임시 산출물 (생성된 비밀번호 등 민감정보가 찍힐 수 있음 — 절대 커밋 금지)
-oracle/**/.*-log.txt
-oracle/**/.answers.txt
+**/.*-log.txt
+**/.answers.txt
 
 # deploy.sh/.ps1의 "실행 요약/접속 정보 로그 저장" 기능(opt-in)이 만드는 파일 — 평문 비밀번호 포함, 절대 커밋 금지
-oracle/deploy/logs/
+**/deploy/logs/
 
 # docker save로 생성되는 대용량 이미지 tar 파일 (수동 전송용, 절대 커밋 금지)
 *.tar

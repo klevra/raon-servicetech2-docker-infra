@@ -175,9 +175,19 @@ if ($LASTEXITCODE -ne 0) {
 
 # push 성공 여부를 명령 종료 코드만으로 판단하지 않고, 실제로 태그가 조회되는지 재확인
 # (원격 레지스트리는 일부 레이어 업로드가 타임아웃 나도 push 명령 자체는 성공으로 끝나는 경우가 있었음 -- 2026-08-24 실제 발생)
+# 주의: `docker manifest inspect`는 이 프로젝트의 insecure(TLS 미적용) 레지스트리에서
+# 실제로는 태그가 정상 존재해도 "no such manifest" 오탐을 내는 경우가 확인됨(2026-08-25,
+# curl로 태그 조회 + docker pull은 둘 다 성공했는데 manifest inspect만 실패) -- 그래서
+# 레지스트리 REST API(/v2/.../tags/list)를 직접 조회하는 방식으로 검증한다.
 Write-Info "push 결과를 재확인합니다..."
-docker manifest inspect $TargetImage *> $null
-if ($LASTEXITCODE -ne 0) {
+$TagFound = $false
+try {
+    $tagsResp = Invoke-WebRequest -Uri "http://$LocalRegistry/v2/$Namespace/${DbKind}/tags/list" -UseBasicParsing -TimeoutSec 5
+    if ($tagsResp.Content -match [regex]::Escape("`"$Tag`"")) { $TagFound = $true }
+} catch {
+    $TagFound = $false
+}
+if (-not $TagFound) {
     Write-Err2 "push 명령은 끝났지만 레지스트리에서 해당 태그가 확인되지 않습니다 (일부 레이어 업로드 실패 가능성). 'docker push $TargetImage'를 다시 실행하세요."
     exit 1
 }
