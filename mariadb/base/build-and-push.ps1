@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   MariaDB 베이스 이미지 빌드 + servicetech2 레지스트리 push 스크립트 (PowerShell)
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   MariaDB 테스트 인스턴스 배포 스크립트 (PowerShell) — servicetech2 레지스트리 기반
 
