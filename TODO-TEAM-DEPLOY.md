@@ -35,11 +35,21 @@
 
 ## 검증 남은 항목
 
-- [ ] gvenzl(XE) 이미지 경로(`21c-xe`/`18c-xe`)로 실제 배포 테스트 (아직 19c EE 경로만 검증됨 — [oracle/PRD.md](oracle/PRD.md) 리스크 항목 참고)
 - [ ] MariaDB/MySQL/PostgreSQL DDL/DML(`/docker-entrypoint-initdb.d/`) 자동 실행 경로 실제 파일로 테스트 (지금까지는 파일 없이 빈 경로로만 검증. CUBRID는 이 기능 자체가 없어 대상 아님)
 - [ ] 팀원 PC 1곳 이상에서 위 "팀원 PC 각자" 체크리스트 실제로 따라해보고 문서 미비점 확인
 - [ ] (신규, 낮은 우선순위) 각 DB별로 흩어진 `deploy.*` 스크립트를 하나의 통합 진입점으로 리팩터링 — 사용자가 "대다수의 DBMS를 처리하고 그 뒤에 생각하자"고 결정해 보류 중. 논의된 구조안은 WORKLOG.md 2026-08-25 "스크립트 통합(최종 목표) 논의" 절 참고
-- [ ] (신규) Oracle XE/MSSQL(Developer·Express)/Db2 Community Edition/Informix Developer Edition — "무료지만 EULA 동의·비운영 전용 제약 있음" 그룹, 아직 미착수 (조사만 완료, WORKLOG.md "DB 라이선스 조사" 절 참고)
+
+## Oracle 추가 에디션 (별도 트랙, 2026-08-25 분리)
+
+- [ ] Oracle XE `21c-xe` (gvenzl 이미지) 배포 테스트 — 완전 무료(용량 제한: 2 CPU/2GB RAM/12GB 데이터), 현재 19c EE 경로만 검증됨 ([oracle/PRD.md](oracle/PRD.md) 리스크 항목 참고)
+- [ ] Oracle XE `18c-xe` (gvenzl 이미지) 배포 테스트 — 위와 동일, 구버전 호환용
+
+## "무료지만 EULA 동의·비운영 전용 제약 있음" 그룹 (2026-08-25 조사 완료, 착수 전)
+
+- [ ] **MSSQL** — `mcr.microsoft.com/mssql/server` 공식 이미지로 Docker 실행 가능 확인. `ACCEPT_EULA=Y` 필요. Developer(전기능·비운영 전용) 또는 Express(운영 가능·10GB 제한) 중 선택
+- [ ] **Db2** — `ibmcom/db2` 공식 이미지로 Docker 실행 가능 확인. `LICENSE=accept` 필요. Community Edition 자체는 무상이지만 **Docker 이미지는 IBM이 비운영 전용으로 명시**
+- [ ] **Informix** — `ibmcom/informix-developer-database` 공식 이미지로 Docker 실행 가능 확인. `LICENSE=accept` 필요. Developer Edition, 비운영 전용
+- 셋 다 "Docker로 올릴 수 있는가?"에 대한 답은 **Yes** — 계정/구매 없이 공식 이미지 pull 자체는 가능. 다만 셋 다 최초 실행 시 EULA 동의 플래그를 넘겨야 하고, Db2/Informix는 이미지 자체가 비운영 전용으로 못박혀 있어 이 프로젝트의 "테스트/데모 전용" 취지와는 잘 맞음
 
 ## 참고: 2026-08-25 발견한 이슈 (환경 문제, 스크립트와 무관)
 
