@@ -1,6 +1,6 @@
 # TODO: 팀서버 레지스트리 배포 잔여 체크리스트
 
-- 작성일: 2026-08-21 / 최종 수정: 2026-08-25 (MySQL/PostgreSQL/CUBRID 추가)
+- 작성일: 2026-08-21 / 최종 수정: 2026-08-25 (MySQL/PostgreSQL/CUBRID 추가, JDK/Tomcat 트랙 신규 추가)
 - 목적: "팀서버 레지스트리 → 방화벽 오픈 → 이미지 등록 → 각 PC에서 스크립트로 원샷 배포" 최종 목표까지 남은 작업 정리
 - 관련 문서: [PHASE-D-FIREWALL-APPROVAL.md](PHASE-D-FIREWALL-APPROVAL.md), [registry-server/linux-registry-setup.md](registry-server/linux-registry-setup.md), [oracle/PRD.md](oracle/PRD.md)
 
@@ -50,6 +50,16 @@
 - [ ] **Db2** — `ibmcom/db2` 공식 이미지로 Docker 실행 가능 확인. `LICENSE=accept` 필요. Community Edition 자체는 무상이지만 **Docker 이미지는 IBM이 비운영 전용으로 명시**
 - [ ] **Informix** — `ibmcom/informix-developer-database` 공식 이미지로 Docker 실행 가능 확인. `LICENSE=accept` 필요. Developer Edition, 비운영 전용
 - 셋 다 "Docker로 올릴 수 있는가?"에 대한 답은 **Yes** — 계정/구매 없이 공식 이미지 pull 자체는 가능. 다만 셋 다 최초 실행 시 EULA 동의 플래그를 넘겨야 하고, Db2/Informix는 이미지 자체가 비운영 전용으로 못박혀 있어 이 프로젝트의 "테스트/데모 전용" 취지와는 잘 맞음
+
+## 신규 트랙: JDK/Tomcat 애플리케이션 서버 이미지 (2026-08-25 요청, 상세는 다음 세션에서 확정)
+
+- [ ] **JDK 18** 이미지 구축 (DB가 아닌 애플리케이션 런타임 — 별도 트랙)
+- [ ] **JDK 21** 이미지 구축
+- [ ] **Tomcat** 이미지 구축
+- 공통 설정 항목(확정, 세부 값/기본값은 미정): `app_path`, `config_path`, `log_path`, `port_nbr`
+  - `app_path`/`config_path`/`log_path` 3개는 전부 **볼륨 마운트 경로** (호스트 ↔ 컨테이너 바인드마운트 대상)
+  - `port_nbr`은 리스너 포트
+- 디테일(정확한 마운트 대상 디렉터리, 이미지 베이스 선택, 배포 스크립트 패턴을 DB 3단계 구조와 동일하게 갈지 여부 등)는 다음 세션에서 논의 예정 — 오늘은 항목만 기록
 
 ## 참고: 2026-08-25 발견한 이슈 (환경 문제, 스크립트와 무관)
 
