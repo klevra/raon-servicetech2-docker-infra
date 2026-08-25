@@ -12,6 +12,12 @@ oracle/deploy/.staging/
 oracle/**/.*-log.txt
 oracle/**/.answers.txt
 
+# deploy.sh/.ps1의 "실행 요약/접속 정보 로그 저장" 기능(opt-in)이 만드는 파일 — 평문 비밀번호 포함, 절대 커밋 금지
+oracle/deploy/logs/
+
+# docker save로 생성되는 대용량 이미지 tar 파일 (수동 전송용, 절대 커밋 금지)
+*.tar
+
 # OS/에디터 잡동사니
 .DS_Store
 Thumbs.db

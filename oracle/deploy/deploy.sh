@@ -11,6 +11,7 @@
 #   3) 스키마(SID/PDB)              4) 계정 정보(SYS/SYSTEM 비밀번호)
 #   5) 애플리케이션 계정(선택)      6) DDL SQL 파일 경로
 #   7) 초기데이터 DML SQL 파일 경로  8) 포트 (리스너)
+#   9) 실행 로그 파일 저장 여부 (선택, 기본 n — 저장 시 비밀번호가 평문으로 파일에 남음)
 #
 # 접속 IP 제한: 이 프로젝트는 sqlnet.ora 등에 별도 Valid Node Checking/ACL을 추가하지
 # 않으며, docker run -p 도 호스트IP 미지정(0.0.0.0 바인딩)이라 기본적으로 접속 IP
@@ -60,6 +61,14 @@ confirm() {
   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
+# confirm과 동일하지만 기본값이 y가 아니라 n (민감정보 포함 등, 명시적 동의가 필요한 항목용)
+confirm_no() {
+  local prompt="${1:-계속 진행할까요?}" reply
+  read -r -p "$prompt (y/n) [n]: " reply
+  reply="${reply:-n}"
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
 port_in_use() {
   local port="$1"
   docker ps --format '{{.Ports}}' 2>/dev/null | grep -q ":${port}->"
@@ -84,7 +93,7 @@ echo "=============================================================="
 # (팀서버 접속 전 각 PC에서 사전 준비 필요 — hosts 등록 + insecure-registry 등록:
 #  registry-server/linux-registry-setup.md 참고)
 echo
-ask "대상 레지스트리 주소 (호스트:포트)" "${REGISTRY_ADDR:-localhost:5000}"
+ask "대상 레지스트리 주소 (호스트:포트)" "${REGISTRY_ADDR:-192.168.0.168:5000}"
 LOCAL_REGISTRY="$REPLY"
 
 # ---------- 1. DB 종류 ----------
@@ -125,7 +134,10 @@ fi
 
 DEPLOY_IMAGE="servicetech2/oracle-deploy:${TAG}"
 info "배포용 이미지를 빌드합니다: $DEPLOY_IMAGE"
-docker build --build-arg "REGISTRY_IMAGE=${REGISTRY_IMAGE}" -t "$DEPLOY_IMAGE" -f Dockerfile .
+if ! docker build --build-arg "REGISTRY_IMAGE=${REGISTRY_IMAGE}" -t "$DEPLOY_IMAGE" -f Dockerfile .; then
+  err "배포용 이미지 빌드 실패."
+  exit 1
+fi
 ok "빌드 완료: $DEPLOY_IMAGE"
 
 # ---------- 3. 컨테이너 이름 ----------
@@ -285,9 +297,30 @@ if port_in_use "$LISTENER_PORT"; then
   warn "포트 ${LISTENER_PORT}은(는) 이미 사용 중인 것으로 보입니다."
 fi
 
+# ---------- 7.5 실행 로그 파일 저장 여부 ----------
+echo
+LOG_FILE=""
+if confirm_no "실행 요약/접속 정보를 로그 파일로 저장할까요? (생성된 비밀번호가 평문으로 포함됩니다)"; then
+  mkdir -p "${SCRIPT_DIR}/logs"
+  LOG_FILE="${SCRIPT_DIR}/logs/${CONTAINER_NAME}_$(date +%Y%m%d_%H%M%S).log"
+  ok "로그 파일: ${LOG_FILE} (.gitignore에 등록되어 있어 커밋되지 않습니다)"
+fi
+
+# 화면 출력과 동시에, LOG_FILE이 설정된 경우 파일에도 그대로 남긴다.
+log_tee() {
+  if [[ -n "$LOG_FILE" ]]; then
+    tee -a "$LOG_FILE"
+  else
+    cat
+  fi
+}
+
 # ---------- 최종 확인 ----------
 echo
+{
 echo "======================= 실행 요약 ======================="
+echo " DB 종류       : $DB_KIND"
+echo " 버전(태그)    : $TAG"
 echo " 이미지        : $DEPLOY_IMAGE"
 echo " 컨테이너 이름 : $CONTAINER_NAME"
 if [[ "$IS_EE" -eq 1 ]]; then
@@ -323,6 +356,7 @@ echo " 데이터        : 휘발성(볼륨 미사용)"
 [[ "$GENERATED_PW" -eq 1 ]] && echo " 생성된 비밀번호(SYSTEM) : $DB_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
 [[ "$APP_GENERATED_PW" -eq 1 ]] && echo " 생성된 비밀번호(${APP_USER}): $APP_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
 echo "==========================================================="
+} | log_tee
 if ! confirm "위 설정으로 컨테이너를 생성할까요?"; then
   err "사용자가 취소했습니다."
   exit 1
@@ -374,7 +408,10 @@ echo
 
 # ---------- 접속 정보 ----------
 echo
+{
 echo "======================= 접속 정보 ======================="
+echo " DB 종류    : $DB_KIND"
+echo " 버전(태그) : $TAG"
 echo " Host       : localhost"
 echo " Port       : $LISTENER_PORT"
 echo " -------------------------- [관리자] --------------------------"
@@ -403,5 +440,10 @@ if [[ -n "$APP_USER" ]]; then
   fi
 fi
 echo "==========================================================="
-warn "비밀번호/토큰은 어떤 파일에도 저장하지 않았습니다."
+} | log_tee
+if [[ -n "$LOG_FILE" ]]; then
+  warn "비밀번호가 포함된 로그 파일이 남아있습니다: ${LOG_FILE} (필요 없어지면 직접 삭제하세요)"
+else
+  warn "비밀번호/토큰은 어떤 파일에도 저장하지 않았습니다."
+fi
 unset DB_PASSWORD APP_PASSWORD

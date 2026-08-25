@@ -12,6 +12,7 @@
     3) 스키마(SID/PDB)              4) 계정 정보(SYS/SYSTEM 비밀번호)
     5) 애플리케이션 계정(선택)      6) DDL SQL 파일 경로
     7) 초기데이터 DML SQL 파일 경로  8) 포트 (리스너)
+    9) 실행 로그 파일 저장 여부 (선택, 기본 n -- 저장 시 비밀번호가 평문으로 파일에 남음)
 
   접속 IP 제한: 이 프로젝트는 sqlnet.ora 등에 별도 Valid Node Checking/ACL을 추가하지
   않으며, docker run -p 도 호스트IP 미지정(0.0.0.0 바인딩)이라 기본적으로 접속 IP
@@ -62,6 +63,13 @@ function Confirm([string]$Prompt = "계속 진행할까요?") {
     return $val -match '^[Yy]'
 }
 
+# Confirm과 동일하지만 기본값이 y가 아니라 n (민감정보 포함 등, 명시적 동의가 필요한 항목용)
+function Confirm-No([string]$Prompt = "계속 진행할까요?") {
+    $val = Read-Host "$Prompt (y/n) [n]"
+    if ([string]::IsNullOrWhiteSpace($val)) { $val = "n" }
+    return $val -match '^[Yy]'
+}
+
 function Port-InUse([string]$Port) {
     $ports = docker ps --format '{{.Ports}}' 2>$null
     return ($ports -match ":$Port->")
@@ -86,7 +94,7 @@ Write-Host "=============================================================="
 # (팀서버 접속 전 각 PC에서 사전 준비 필요 -- hosts 등록 + insecure-registry 등록:
 #  registry-server/linux-registry-setup.md 참고)
 Write-Host ""
-$envDefault = if ($env:REGISTRY_ADDR) { $env:REGISTRY_ADDR } else { "localhost:5000" }
+$envDefault = if ($env:REGISTRY_ADDR) { $env:REGISTRY_ADDR } else { "192.168.0.168:5000" }
 $LocalRegistry = Ask "대상 레지스트리 주소 (호스트:포트)" $envDefault
 
 Write-Host ""
@@ -131,6 +139,10 @@ if ($LASTEXITCODE -ne 0) {
 $DeployImage = "servicetech2/oracle-deploy:$Tag"
 Write-Info "배포용 이미지를 빌드합니다: $DeployImage"
 docker build --build-arg "REGISTRY_IMAGE=$RegistryImage" -t $DeployImage -f Dockerfile .
+if ($LASTEXITCODE -ne 0) {
+    Write-Err2 "배포용 이미지 빌드 실패."
+    exit 1
+}
 Write-Ok "빌드 완료: $DeployImage"
 
 Write-Host ""
@@ -281,39 +293,55 @@ if (Port-InUse $ListenerPort) {
 }
 
 Write-Host ""
-Write-Host "======================= 실행 요약 ======================="
-Write-Host " 이미지        : $DeployImage"
-Write-Host " 컨테이너 이름 : $ContainerName"
+$LogFile = $null
+if (Confirm-No "실행 요약/접속 정보를 로그 파일로 저장할까요? (생성된 비밀번호가 평문으로 포함됩니다)") {
+    $LogDir = Join-Path $ScriptDir "logs"
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+    $LogFile = Join-Path $LogDir "${ContainerName}_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+    Write-Ok "로그 파일: $LogFile (.gitignore에 등록되어 있어 커밋되지 않습니다)"
+}
+
+function Write-Both([string]$msg) {
+    Write-Host $msg
+    if ($LogFile) { Add-Content -Path $LogFile -Value $msg -Encoding utf8 }
+}
+
+Write-Host ""
+Write-Both "======================= 실행 요약 ======================="
+Write-Both " DB 종류       : $DbKind"
+Write-Both " 버전(태그)    : $Tag"
+Write-Both " 이미지        : $DeployImage"
+Write-Both " 컨테이너 이름 : $ContainerName"
 if ($IsEE) {
-    Write-Host " SID / PDB     : $OracleSid / $OraclePdb"
+    Write-Both " SID / PDB     : $OracleSid / $OraclePdb"
 } else {
     $pdbDisplay = if ($OracleDatabase) { $OracleDatabase } else { "(생성 안 함, 기본 XEPDB1만 사용)" }
-    Write-Host " 추가 PDB      : $pdbDisplay"
+    Write-Both " 추가 PDB      : $pdbDisplay"
 }
-Write-Host " 문자셋        : $Charset"
-Write-Host " 리스너 포트   : $ListenerPort"
-Write-Host " ---------------------------------------------------------"
-Write-Host " [관리자] 계정 : SYSTEM  (SYS도 동일 비밀번호, Role=SYSDBA로 접속 시 사용)"
-Write-Host " [관리자] URL  : jdbc:oracle:thin:@localhost:$ListenerPort/$ServiceName  (PDB 기준 고정)"
-Write-Host "               (DBeaver 'Database/Service Name' 필드에는 SID가 아니라 '$ServiceName'을 입력)"
+Write-Both " 문자셋        : $Charset"
+Write-Both " 리스너 포트   : $ListenerPort"
+Write-Both " ---------------------------------------------------------"
+Write-Both " [관리자] 계정 : SYSTEM  (SYS도 동일 비밀번호, Role=SYSDBA로 접속 시 사용)"
+Write-Both " [관리자] URL  : jdbc:oracle:thin:@localhost:$ListenerPort/$ServiceName  (PDB 기준 고정)"
+Write-Both "               (DBeaver 'Database/Service Name' 필드에는 SID가 아니라 '$ServiceName'을 입력)"
 if ($AppUser) {
     $AppJdbcUrl = if ($AppConnectMode -eq "sid") { "jdbc:oracle:thin:@localhost:${ListenerPort}:${AppConnectDb}" } else { "jdbc:oracle:thin:@localhost:${ListenerPort}/${AppConnectDb}" }
-    Write-Host " ---------------------------------------------------------"
-    Write-Host " [앱]   계정   : $AppUser  (ALL PRIVILEGES)"
-    Write-Host " [앱]   접속방식: $AppConnectLabel = $AppConnectDb"
-    Write-Host " [앱]   URL    : $AppJdbcUrl"
+    Write-Both " ---------------------------------------------------------"
+    Write-Both " [앱]   계정   : $AppUser  (ALL PRIVILEGES)"
+    Write-Both " [앱]   접속방식: $AppConnectLabel = $AppConnectDb"
+    Write-Both " [앱]   URL    : $AppJdbcUrl"
 } else {
-    Write-Host " ---------------------------------------------------------"
-    Write-Host " [앱]   계정   : (생성 안 함, SYSTEM으로만 접속)"
+    Write-Both " ---------------------------------------------------------"
+    Write-Both " [앱]   계정   : (생성 안 함, SYSTEM으로만 접속)"
 }
-Write-Host " ---------------------------------------------------------"
-Write-Host " 접속 IP 제한  : 없음 (0.0.0.0 바인딩, Oracle 계정은 host에 종속되지 않음)"
-Write-Host " DDL 경로      : $(if ($DdlDir) { $DdlDir } else { '(없음)' })"
-Write-Host " DML 경로      : $(if ($DmlDir) { $DmlDir } else { '(없음)' })"
-Write-Host " 데이터        : 휘발성(볼륨 미사용)"
-if ($GeneratedPw) { Write-Host " 생성된 비밀번호(SYSTEM) : $DbPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
-if ($AppGeneratedPw) { Write-Host " 생성된 비밀번호($AppUser): $AppPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
-Write-Host "==========================================================="
+Write-Both " ---------------------------------------------------------"
+Write-Both " 접속 IP 제한  : 없음 (0.0.0.0 바인딩, Oracle 계정은 host에 종속되지 않음)"
+Write-Both " DDL 경로      : $(if ($DdlDir) { $DdlDir } else { '(없음)' })"
+Write-Both " DML 경로      : $(if ($DmlDir) { $DmlDir } else { '(없음)' })"
+Write-Both " 데이터        : 휘발성(볼륨 미사용)"
+if ($GeneratedPw) { Write-Both " 생성된 비밀번호(SYSTEM) : $DbPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
+if ($AppGeneratedPw) { Write-Both " 생성된 비밀번호($AppUser): $AppPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
+Write-Both "==========================================================="
 if (-not (Confirm "위 설정으로 컨테이너를 생성할까요?")) {
     Write-Err2 "사용자가 취소했습니다."
     exit 1
@@ -365,31 +393,37 @@ while ($true) {
 Write-Host ""
 
 Write-Host ""
-Write-Host "======================= 접속 정보 ======================="
-Write-Host " Host       : localhost"
-Write-Host " Port       : $ListenerPort"
-Write-Host " -------------------------- [관리자] --------------------------"
-Write-Host " Service    : $ServiceName  (DBeaver 'Database/Service Name' 필드 — SID 아님, PDB 기준 고정)"
-Write-Host " Username   : SYSTEM  (SYS도 동일 비밀번호, 접속 시 Role=SYSDBA 필요)"
-Write-Host " JDBC URL   : jdbc:oracle:thin:@localhost:$ListenerPort/$ServiceName"
+Write-Both "======================= 접속 정보 ======================="
+Write-Both " DB 종류    : $DbKind"
+Write-Both " 버전(태그) : $Tag"
+Write-Both " Host       : localhost"
+Write-Both " Port       : $ListenerPort"
+Write-Both " -------------------------- [관리자] --------------------------"
+Write-Both " Service    : $ServiceName  (DBeaver 'Database/Service Name' 필드 — SID 아님, PDB 기준 고정)"
+Write-Both " Username   : SYSTEM  (SYS도 동일 비밀번호, 접속 시 Role=SYSDBA 필요)"
+Write-Both " JDBC URL   : jdbc:oracle:thin:@localhost:$ListenerPort/$ServiceName"
 if ($GeneratedPw) {
-    Write-Host " 접속 예시  : sqlplus system/$DbPassword@localhost:$ListenerPort/$ServiceName"
+    Write-Both " 접속 예시  : sqlplus system/$DbPassword@localhost:$ListenerPort/$ServiceName"
 } else {
-    Write-Host " 접속 예시  : sqlplus system/<입력한 비밀번호>@localhost:$ListenerPort/$ServiceName"
+    Write-Both " 접속 예시  : sqlplus system/<입력한 비밀번호>@localhost:$ListenerPort/$ServiceName"
 }
 if ($AppUser) {
     $AppJdbcUrl = if ($AppConnectMode -eq "sid") { "jdbc:oracle:thin:@localhost:${ListenerPort}:${AppConnectDb}" } else { "jdbc:oracle:thin:@localhost:${ListenerPort}/${AppConnectDb}" }
-    Write-Host " ---------------------------- [앱] -----------------------------"
-    Write-Host " 계정       : $AppUser  (ALL PRIVILEGES)"
-    Write-Host " DBeaver    : Connection Type = $AppConnectLabel, Database = $AppConnectDb"
-    Write-Host " JDBC URL   : $AppJdbcUrl"
+    Write-Both " ---------------------------- [앱] -----------------------------"
+    Write-Both " 계정       : $AppUser  (ALL PRIVILEGES)"
+    Write-Both " DBeaver    : Connection Type = $AppConnectLabel, Database = $AppConnectDb"
+    Write-Both " JDBC URL   : $AppJdbcUrl"
     if ($AppGeneratedPw) {
-        Write-Host " 접속 예시  : sqlplus $AppUser/$AppPassword@localhost:$ListenerPort/$AppConnectDb"
+        Write-Both " 접속 예시  : sqlplus $AppUser/$AppPassword@localhost:$ListenerPort/$AppConnectDb"
     } else {
-        Write-Host " 접속 예시  : sqlplus $AppUser/<입력한 비밀번호>@localhost:$ListenerPort/$AppConnectDb"
+        Write-Both " 접속 예시  : sqlplus $AppUser/<입력한 비밀번호>@localhost:$ListenerPort/$AppConnectDb"
     }
 }
-Write-Host "==========================================================="
-Write-Warn2 "비밀번호/토큰은 어떤 파일에도 저장하지 않았습니다."
+Write-Both "==========================================================="
+if ($LogFile) {
+    Write-Warn2 "비밀번호가 포함된 로그 파일이 남아있습니다: $LogFile (필요 없어지면 직접 삭제하세요)"
+} else {
+    Write-Warn2 "비밀번호/토큰은 어떤 파일에도 저장하지 않았습니다."
+}
 $DbPassword = $null
 $AppPassword = $null
