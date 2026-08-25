@@ -1,5 +1,7 @@
 # 로컬 전용 설정 (VSCode 확장 등, 사람/머신마다 다를 수 있음)
 .claude/settings.local.json
+# 세션 실행 중에만 의미 있는 임시 락 파일 (PID/세션ID/타임스탬프, 커밋 대상 아님)
+.claude/scheduled_tasks.lock
 
 # 실행 시 자동 생성되는 환경설정 (예시 파일은 .env.example로 추적)
 oracle/registry/.env

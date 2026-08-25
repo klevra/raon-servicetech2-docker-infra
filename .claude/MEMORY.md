@@ -1,0 +1,2 @@
+- [팀서버 배포 (2026-08-18)](memory/teamserver-deployment.md) — 팀서버 Docker Rootless 배포 계획 및 4단계 검증
+- [Oracle Linux 8.10 특이사항](memory/oracle-linux-notes.md) — Kernel 5.15.0-306, dnf 패키지 관리, user namespace 지원

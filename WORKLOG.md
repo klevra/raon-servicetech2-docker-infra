@@ -121,3 +121,121 @@
 - 변경 후 `build-and-push.sh`로 프롬프트/기본값 동작 재검증(정상). 다만 검증 도중 이 PC의 Docker Desktop 데몬 자체가 응답 없음 상태가 되어 최종 push까지는 확인 못 함 — 스크립트 로직 자체는 문제없음, 데몬 재시작 후 재확인 필요.
 - 사무실 PC에서 그대로 따라 할 수 있는 온보딩 체크리스트를 [OFFICE-SETUP.md](OFFICE-SETUP.md)로 작성 (저장소 클론, `gh auth login`, hosts/insecure-registries 설정, Oracle Auth Token 재발급 필요성, VSCode Remote Control 토글 등 이관되지 않는 설정 안내 포함).
 - **상태**: 스크립트 변경 및 가이드 문서 작성 완료. 사무실 PC에서의 실제 실행/검증은 사용자가 진행 예정.
+
+---
+
+## 2026-08-18
+
+### 팀서버 Docker 업그레이드 계획 수립 (Rootful vs Rootless 결정)
+
+**상황**
+- 팀서버(Oracle Linux 8.10, Kernel 5.15.0-306) 확인 결과
+  - Docker 24.0.9 (dnf 패키지 설치 ✅ — 소스 빌드 아님)
+  - 현재: rootful 운영 (root 권한)
+  - 아직 컨테이너 없음 (레지스트리 미배포 = 마이그레이션 불필요)
+  - daemon.json 커스텀 설정 없음 (깨끗한 상태)
+
+**선택지 분석 및 결정**
+- **Option A (Rootful 유지)**: Docker 28로만 업그레이드 → 간단하지만 보안 제약
+- **Option B (Rootless 완전 전환)** ✅ **선택** → 보안 강화, 지금이 최적 타이밍
+- **Option C (단계적 전환)**: Rootful 유지 후 나중에 전환 → 리스크 분산
+
+**선택 사유**
+1. 최적 타이밍: 컨테이너 0개, 설정 없음 → 처음부터 rootless로 시작 가능
+2. 보안 고려: 프라이빗 레지스트리 = 중요 자산 → root 권한 노출 제한 필수
+3. 기술 호환: Kernel 5.15.0-306 + user namespace 완벽 지원
+4. 운영성: 포트 5000 (>1024) → rootless에서 직접 바인드 가능
+
+**산출물**
+- [TEAM-SERVER-ANALYSIS.md](TEAM-SERVER-ANALYSIS.md) — 현황 분석 + 3가지 선택지 비교표 (Rootful vs Rootless)
+- [registry-server/docker-rootless-setup-oracle8.md](registry-server/docker-rootless-setup-oracle8.md) — Oracle Linux 8.10 Rootless 설치 상세 가이드 (Phase 1-6)
+  - Phase 1: Rootful 제거
+  - Phase 2: Rootless 설치 (subuid/subgid, systemd --user 통합)
+  - Phase 3: 검증
+  - Phase 4: 레지스트리 재구성
+  - Phase 5: 버전 업데이트 (Optional)
+  - Phase 6: 최종 검증
+
+**다음 단계**
+- 팀서버에서 Phase 1~4 실행 (사용자 직접 수행 예정)
+- 레지스트리 정상 작동 후 추가 기능 테스트 (push/pull, Oracle 이미지 등)
+- Phase 5에서 Docker 28 또는 29로 업그레이드 결정
+
+**사전 확인 추가**: 사용자 지적으로 **네트워크/패키지 연결성 확인**의 중요성 강조 및 Phase 0 추가
+- dnf 패키지 서버 연결 확인 (Docker 설치 가능 여부)
+- Docker Hub / 웹서버 통신 확인 (이미지 다운로드 가능 여부)
+- 4가지 시나리오 별 대응 방법 정리 ([TEAM-SERVER-NETWORK-CHECK.md](TEAM-SERVER-NETWORK-CHECK.md))
+
+**산출물 (추가)**:
+- [TEAM-SERVER-NETWORK-CHECK.md](TEAM-SERVER-NETWORK-CHECK.md) — Phase 0 네트워크/패키지 연결성 확인 (필수)
+  - 5가지 확인 항목 체크리스트
+  - 4가지 문제 시나리오 + 대응 방법
+  - 정상/대체/오프라인 설치 경로
+  
+- [DEPLOYMENT-GUIDE.md](DEPLOYMENT-GUIDE.md) — 전체 배포 가이드 (통합 진입점)
+  - 모든 문서 네비게이션
+  - 빠른 시작 (정상 환경)
+  - 의사결정 흐름도
+  - 문제 해결 종합 테이블
+
+**권한 정보 추가**: 사용자 재지적으로 Phase 0에서 **root 권한인지 일반 사용자인지 확인** 필수로 추가
+- Phase 0 0단계: 현재 권한 확인 (`whoami`, `id`)
+- Phase별 권한 구분: ✅ 일반 사용자 가능 / 🔴 sudo 필수
+- 모든 명령어에 권한 표시 ($=일반사용자, #=root)
+- Phase 0~6에 동일 정보 추가로 일관성 유지
+
+**팀서버 실행 결과 및 진단**:
+
+**네트워크 진단 결과** (2026-08-18 팀서버 실행 후 분석):
+- ✅ DNS: 작동 (get.docker.com → IP 주소 반환)
+- ❌ 외부 인터넷: **완전 차단** (8.8.8.8, 1.1.1.1 모두 ping 100% loss)
+- ❌ Docker Hub: 접근 불가 (timeout)
+- ❌ Docker 저장소: 미등록/접근 불가
+- ✅ 기존 rootful Docker: 설치됨
+
+**결론**: 🔴 **완전 오프라인 환경 확정**
+
+**산출물**: [TEAMSERVER-OFFLINE-DIAGNOSIS.md](TEAMSERVER-OFFLINE-DIAGNOSIS.md)
+
+**현재 추천**:
+1. IT팀에 네트워크 정책 확인 요청
+2. 오프라인 바이너리 지원 가능 여부 확인
+3. 기존 rootful Docker 유지 (Phase 1~6 실행 중단)
+
+**상태**: ⏳ IT팀 응답 대기. 재설치 계획 변경 필요 (온라인 → 오프라인 모드)
+
+### 오프라인 배포 계획 수정 (새로운 전략)
+
+**새로운 상황** (사용자 추가 정보):
+- 팀서버: 완전 오프라인 (정상 정책) ✅
+- 외부 VM: Oracle Linux 8.10, 인터넷 가능 ✅
+- 패키지 반입: 가능 (USB/SCP 등) ✅
+- 팀장 승인: 이미 획득 ✅
+- 기존 이미지: 불필요 (제거 가능) ✅
+
+**새로운 전략: 2단계 배포**
+1. **Phase A** (외부 VM, 1~2시간):
+   - Rootless Docker 설치
+   - 필요한 바이너리 + 이미지 (registry:2) 다운로드
+   - docker-offline-package.tar.gz 생성
+
+2. **Phase B** (파일 전달, 5~10분):
+   - 외부 VM → 팀서버로 패키지 파일 이동 (USB/SCP)
+
+3. **Phase C** (팀서버, 20~30분):
+   - 기존 Docker 제거
+   - Rootless 바이너리 수동 설치
+   - 이미지 로드
+
+4. **Phase D** (팀서버, 10~15분):
+   - 레지스트리 컨테이너 구성
+
+**총 소요 시간**: ~70분
+
+**산출물**: [OFFLINE-DEPLOYMENT-PLAN.md](OFFLINE-DEPLOYMENT-PLAN.md)
+- Phase A~D 상세 절차
+- 체크리스트
+- 롤백 방법
+- IT팀 협의 불필요 (기술적으로 완전 해결)
+
+**상태**: ✅ 새로운 계획 완성. 외부 VM에서 Phase A부터 시작 가능

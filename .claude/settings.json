@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh --version)",
+      "Bash(git --version)",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(gh auth *)",
+      "Bash(gh extension *)",
+      "Bash(docker info *)",
+      "Bash(where.exe gh *)",
+      "Bash(echo \"=== .claude dir ===\" && find \"d:/99_project/Docker/.claude\" -type f 2>&1 *)",
+      "Read(//c/Users/jhhwang/.claude/projects/d--99-project-Docker/memory/**)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)"
+    ]
+  }
+}
