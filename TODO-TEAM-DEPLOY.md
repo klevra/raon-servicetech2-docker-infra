@@ -39,6 +39,7 @@
 - [ ] MariaDB/MySQL/PostgreSQL DDL/DML(`/docker-entrypoint-initdb.d/`) 자동 실행 경로 실제 파일로 테스트 (지금까지는 파일 없이 빈 경로로만 검증. CUBRID는 이 기능 자체가 없어 대상 아님)
 - [ ] 팀원 PC 1곳 이상에서 위 "팀원 PC 각자" 체크리스트 실제로 따라해보고 문서 미비점 확인
 - [ ] (신규, 낮은 우선순위) 각 DB별로 흩어진 `deploy.*` 스크립트를 하나의 통합 진입점으로 리팩터링 — 사용자가 "대다수의 DBMS를 처리하고 그 뒤에 생각하자"고 결정해 보류 중. 논의된 구조안은 WORKLOG.md 2026-08-25 "스크립트 통합(최종 목표) 논의" 절 참고
+- [ ] (신규, 2026-08-26 발견) **배포용(`-deploy`) 이미지 중복 제거**: 지금은 base 이미지에 HEALTHCHECK만 추가하려고 매번 `docker build`로 거의 동일한 이미지를 하나 더 로컬에 만들어서, Docker Desktop에 DB당 이미지가 2개씩 보임(사용자가 실제로 발견). `docker build` 대신 `docker run --health-cmd/--health-interval/...` 플래그로 헬스체크를 지정하면 별도 빌드 없이 base 이미지를 바로 실행 가능 — 로컬 이미지 DB당 1개로 줄고 `deploy/Dockerfile` 자체도 불필요해짐. 영향 범위: oracle/mariadb/mysql/postgres/cubrid 5종의 `deploy.sh`+`.ps1`(10개 파일) + Dockerfile 5개 삭제. 적용 여부/시점 결정 대기 중
 
 ## Oracle 추가 에디션 (2026-08-26 검증 완료)
 
