@@ -137,14 +137,10 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$DeployImage = "servicetech2/mariadb-deploy:$Tag"
-Write-Info "배포용 이미지를 빌드합니다: $DeployImage"
-docker build --build-arg "REGISTRY_IMAGE=$RegistryImage" -t $DeployImage -f Dockerfile .
-if ($LASTEXITCODE -ne 0) {
-    Write-Err2 "배포용 이미지 빌드 실패."
-    exit 1
-}
-Write-Ok "빌드 완료: $DeployImage"
+# 예전에는 여기서 HEALTHCHECK만 추가한 "배포용" 이미지를 별도로 docker build 했었다.
+# docker run --health-cmd 등으로 헬스체크를 런타임에 지정할 수 있어(빌드 없이 동일 효과),
+# base 이미지를 그대로 실행한다 -- 로컬에 이미지가 DB당 1개만 남는다 (2026-08-26 정리).
+$DeployImage = $RegistryImage
 
 Write-Host ""
 $ContainerName = Ask "컨테이너 이름" "mariadb-$Tag-deploy"
@@ -286,6 +282,11 @@ if (-not (Confirm "위 설정으로 컨테이너를 생성할까요?")) {
 
 $RunArgs = @("-d", "--name", $ContainerName, "-p", "${ListenerPort}:3306")
 if ($SetupMount) { $RunArgs += @("-v", "${StagingDir}:/docker-entrypoint-initdb.d:ro") }
+# 예전 deploy/Dockerfile의 HEALTHCHECK를 그대로 옮긴 것 -- 별도 이미지 빌드 없이 동일하게 동작
+$RunArgs += @(
+    '--health-cmd=healthcheck.sh --connect --innodb_initialized || exit 1',
+    "--health-interval=5s", "--health-timeout=5s", "--health-start-period=30s", "--health-retries=10"
+)
 $RunArgs += @(
     "-e", "MARIADB_ROOT_PASSWORD=$DbPassword",
     "-e", "MARIADB_DATABASE=$DbName",

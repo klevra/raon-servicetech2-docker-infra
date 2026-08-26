@@ -136,13 +136,10 @@ if ! docker pull "$REGISTRY_IMAGE"; then
   exit 1
 fi
 
-DEPLOY_IMAGE="servicetech2/mysql-deploy:${TAG}"
-info "배포용 이미지를 빌드합니다: $DEPLOY_IMAGE"
-if ! docker build --build-arg "REGISTRY_IMAGE=${REGISTRY_IMAGE}" -t "$DEPLOY_IMAGE" -f Dockerfile .; then
-  err "배포용 이미지 빌드 실패."
-  exit 1
-fi
-ok "빌드 완료: $DEPLOY_IMAGE"
+# 예전에는 여기서 HEALTHCHECK만 추가한 "배포용" 이미지를 별도로 docker build 했었다.
+# docker run --health-cmd 등으로 헬스체크를 런타임에 지정할 수 있어(빌드 없이 동일 효과),
+# base 이미지를 그대로 실행한다 -- 로컬에 이미지가 DB당 1개만 남는다 (2026-08-26 정리).
+DEPLOY_IMAGE="$REGISTRY_IMAGE"
 
 # ---------- 3. 컨테이너 이름 ----------
 echo
@@ -301,6 +298,11 @@ fi
 # ---------- docker run 구성 ----------
 RUN_ARGS=(-d --name "$CONTAINER_NAME" -p "${LISTENER_PORT}:3306")
 [[ "$SETUP_MOUNT" -eq 1 ]] && RUN_ARGS+=(-v "${STAGING_DIR}:/docker-entrypoint-initdb.d:ro")
+# 예전 deploy/Dockerfile의 HEALTHCHECK를 그대로 옮긴 것 -- 별도 이미지 빌드 없이 동일하게 동작
+RUN_ARGS+=(
+  --health-cmd='mysqladmin ping -h 127.0.0.1 -uroot -p"$MYSQL_ROOT_PASSWORD" --silent || exit 1'
+  --health-interval=5s --health-timeout=5s --health-start-period=30s --health-retries=10
+)
 RUN_ARGS+=(
   -e "MYSQL_ROOT_PASSWORD=${DB_PASSWORD}"
   -e "MYSQL_DATABASE=${DB_NAME}"

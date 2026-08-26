@@ -355,3 +355,14 @@
 - 21c-xe는 Service Name 방식, 18c-xe는 SID 방식으로 각각 앱 계정 생성 → 로그인 → `CREATE TABLE`/`INSERT`/`COMMIT`까지 실제 검증 완료. SID 방식 접속 예시 문구(`@host:port/SID` 슬래시 표기)가 문법적으로 의심스러워 보여 콜론 표기(`@host:port:SID`)와 비교 테스트했으나, XE는 SID와 동일한 이름의 서비스도 자동 등록해서 슬래시 표기가 실제로 정상 동작함을 확인(콜론 표기는 오히려 ORA-12545로 실패) — 기존 스크립트 문구가 맞았음, 수정 불필요
 - Oracle Container Registry 로그인 없이도 계정/구매 없이 완전 무료로 쓸 수 있는 경로가 실사용까지 확인된 셈 — TODO의 "Oracle XE 추가 에디션" 항목 완료 처리
 - 검증 후 테스트 컨테이너/배포용 이미지/베이스 이미지(레지스트리에는 이미 push됨) 전부 로컬 정리, 빌드 캐시도 정리
+
+### 배포용(`-deploy`) 이미지 중복 제거 — 실버그 2건 추가 발견
+
+- 사용자가 Docker Desktop에서 DB당 이미지가 2개씩(base + `-deploy`) 뜨는 걸 직접 발견해 질문. 원인: 지금까지 HEALTHCHECK 하나 추가하려고 매번 `docker build`로 base 이미지를 거의 그대로 복제한 "배포용" 이미지를 로컬에 하나 더 만들고 있었음
+- `docker run --health-cmd/--health-interval/--health-timeout/--health-start-period/--health-retries` 플래그로 헬스체크를 런타임에 지정할 수 있다는 점에 착안 — `docker build` 단계를 완전히 제거하고 base 이미지를 바로 실행하도록 oracle/mariadb/mysql/postgres/cubrid 5종의 `deploy.sh`+`.ps1`(10개 파일)을 수정, `deploy/Dockerfile` 5개 삭제
+- **버그 1 (심각)**: PowerShell에서 `docker run @RunArgs`처럼 배열을 native exe에 splatting할 때, 각 원소 문자열 안의 `"`(큰따옴표)가 Windows 프로세스 인자 전달 과정에서 조용히 사라지는 현상을 실측으로 확인. mysql/postgres는 따옴표 안 내용에 공백이 없어(`$MYSQL_ROOT_PASSWORD` 등 변수 하나) 값 자체는 살아남아 우연히 동작했지만, cubrid는 따옴표 안에 공백이 있는 문자열(`"SELECT 1;"`)이라 따옴표가 사라지면서 그 공백이 새로운 인자 경계가 되어 `docker run`이 통째로 `docker: invalid reference format` 에러로 실패 — 실제 재현. 여러 차례 `docker run --health-cmd=... alpine` 조합으로 직접 실험해 원인을 좁혔고, 최종적으로 PowerShell 문자열 안에서 `"` 대신 `\"`(백슬래시로 이스케이프한 큰따옴표)를 쓰면 Windows 인자 전달 과정에서 정확히 리터럴 `"` 하나로 살아남는다는 것을 확인 — mysql/postgres/cubrid/oracle 4개 `deploy.ps1`의 헬스체크 문자열을 전부 이 방식으로 수정 후 재검증 완료
+- **버그 2**: 위 작업 검증 도중 `mysql/deploy/deploy.ps1`의 JDBC URL(`jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=...`)에서 PowerShell이 `$DbName?allowPublicKeyRetrieval`을 통째로 하나의(존재하지 않는) 변수명으로 잘못 해석해, DB 이름이 URL에서 통째로 빠지고 `=true&useSSL=false`만 남는 것을 발견(`$var?` 형태에서 `?`가 변수명의 일부로 흡수됨 — 직전 턴에 이 JDBC 옵션 기능을 추가하며 생긴 버그, 그때는 못 잡았음). `${DbName}`처럼 중괄호로 변수명 경계를 명시해 수정, 재검증으로 정상 렌더링 확인
+- 5개 DB 전부 `.sh`/`.ps1` 양쪽으로 pull→run(빌드 없이)→healthy→로그인까지 재검증 완료, 테스트 컨테이너/이미지 정리
+- 결과: 로컬 이미지가 DB당 1개로 감소, `docker build` 단계가 사라져 배포도 약간 빨라짐, `deploy/Dockerfile` 5개는 저장소에서 삭제
+
+**상태**: ✅ 이미지 중복 제거 리팩터링 + 실사용 중 발견한 PowerShell 인자 전달 버그 2건 수정 완료.

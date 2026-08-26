@@ -139,14 +139,10 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-$DeployImage = "servicetech2/mysql-deploy:$Tag"
-Write-Info "배포용 이미지를 빌드합니다: $DeployImage"
-docker build --build-arg "REGISTRY_IMAGE=$RegistryImage" -t $DeployImage -f Dockerfile .
-if ($LASTEXITCODE -ne 0) {
-    Write-Err2 "배포용 이미지 빌드 실패."
-    exit 1
-}
-Write-Ok "빌드 완료: $DeployImage"
+# 예전에는 여기서 HEALTHCHECK만 추가한 "배포용" 이미지를 별도로 docker build 했었다.
+# docker run --health-cmd 등으로 헬스체크를 런타임에 지정할 수 있어(빌드 없이 동일 효과),
+# base 이미지를 그대로 실행한다 -- 로컬에 이미지가 DB당 1개만 남는다 (2026-08-26 정리).
+$DeployImage = $RegistryImage
 
 Write-Host ""
 $ContainerName = Ask "컨테이너 이름" "mysql-$Tag-deploy"
@@ -264,11 +260,11 @@ Write-Both " DB 이름       : $DbName"
 Write-Both " 포트          : $ListenerPort"
 Write-Both " ---------------------------------------------------------"
 Write-Both " [관리자] 계정 : root"
-Write-Both " [관리자] URL  : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
+Write-Both " [관리자] URL  : jdbc:mysql://localhost:${ListenerPort}/${DbName}?allowPublicKeyRetrieval=true&useSSL=false"
 if ($AppUser) {
     Write-Both " ---------------------------------------------------------"
     Write-Both " [앱]   계정   : $AppUser  ($DbName DB에 전체 권한)"
-    Write-Both " [앱]   URL    : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
+    Write-Both " [앱]   URL    : jdbc:mysql://localhost:${ListenerPort}/${DbName}?allowPublicKeyRetrieval=true&useSSL=false"
 } else {
     Write-Both " ---------------------------------------------------------"
     Write-Both " [앱]   계정   : (생성 안 함, root로만 접속)"
@@ -288,6 +284,11 @@ if (-not (Confirm "위 설정으로 컨테이너를 생성할까요?")) {
 
 $RunArgs = @("-d", "--name", $ContainerName, "-p", "${ListenerPort}:3306")
 if ($SetupMount) { $RunArgs += @("-v", "${StagingDir}:/docker-entrypoint-initdb.d:ro") }
+# 예전 deploy/Dockerfile의 HEALTHCHECK를 그대로 옮긴 것 -- 별도 이미지 빌드 없이 동일하게 동작
+$RunArgs += @(
+    '--health-cmd=mysqladmin ping -h 127.0.0.1 -uroot -p\"$MYSQL_ROOT_PASSWORD\" --silent || exit 1',
+    "--health-interval=5s", "--health-timeout=5s", "--health-start-period=30s", "--health-retries=10"
+)
 $RunArgs += @(
     "-e", "MYSQL_ROOT_PASSWORD=$DbPassword",
     "-e", "MYSQL_DATABASE=$DbName",
@@ -339,7 +340,7 @@ Write-Both " Port       : $ListenerPort"
 Write-Both " -------------------------- [관리자] --------------------------"
 Write-Both " Database   : $DbName"
 Write-Both " Username   : root"
-Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
+Write-Both " JDBC URL   : jdbc:mysql://localhost:${ListenerPort}/${DbName}?allowPublicKeyRetrieval=true&useSSL=false"
 Write-Both " JDBC 옵션값: allowPublicKeyRetrieval=true, useSSL=false (위 URL에 이미 포함됨)"
 Write-Both " 드라이버 옵션(DBeaver 등 GUI 툴, URL 대신 직접 접속 시): Driver properties 탭에서"
 Write-Both "   allowPublicKeyRetrieval = true"
@@ -352,7 +353,7 @@ if ($GeneratedPw) {
 if ($AppUser) {
     Write-Both " ---------------------------- [앱] -----------------------------"
     Write-Both " 계정       : $AppUser  ($DbName DB에 전체 권한)"
-    Write-Both " JDBC URL   : jdbc:mysql://localhost:$ListenerPort/$DbName?allowPublicKeyRetrieval=true&useSSL=false"
+    Write-Both " JDBC URL   : jdbc:mysql://localhost:${ListenerPort}/${DbName}?allowPublicKeyRetrieval=true&useSSL=false"
     Write-Both " JDBC 옵션값: allowPublicKeyRetrieval=true, useSSL=false (위 URL에 이미 포함됨)"
     Write-Both " 드라이버 옵션(DBeaver 등 GUI 툴, URL 대신 직접 접속 시): Driver properties 탭에서"
     Write-Both "   allowPublicKeyRetrieval = true"

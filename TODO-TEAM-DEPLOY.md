@@ -1,10 +1,25 @@
 # TODO: 팀서버 레지스트리 배포 잔여 체크리스트
 
-- 작성일: 2026-08-21 / 최종 수정: 2026-08-26 (Oracle XE 21c/18c 검증 완료, mysql/postgres/cubrid 정밀 버전 태그 추가)
+- 작성일: 2026-08-21 / 최종 수정: 2026-08-26 (Oracle XE 21c/18c 검증 완료, mysql/postgres/cubrid 정밀 버전 태그 추가, 배포용 이미지 중복 제거)
 - 목적: "팀서버 레지스트리 → 방화벽 오픈 → 이미지 등록 → 각 PC에서 스크립트로 원샷 배포" 최종 목표까지 남은 작업 정리
 - 관련 문서: [PHASE-D-FIREWALL-APPROVAL.md](PHASE-D-FIREWALL-APPROVAL.md), [registry-server/linux-registry-setup.md](registry-server/linux-registry-setup.md), [oracle/PRD.md](oracle/PRD.md)
 
 ---
+
+## 잔여 항목 요약 (번호순, 2026-08-26 기준)
+
+1. 레지스트리 볼륨/재시작 정책 결정 (서버 측)
+2. 레지스트리 인증(htpasswd) 적용 여부 (서버 측, 선택)
+3. hosts/insecure-registries 등록 등 팀원 PC 사전 준비 실사용 검증
+4. MariaDB/MySQL/PostgreSQL DDL/DML 실제 파일 테스트
+5. deploy 스크립트 통합 리팩터링 (보류 중)
+6. ~~배포용(`-deploy`) 이미지 중복 제거~~ — ✅ 완료
+7. MSSQL 구축 (EULA 동의 필요)
+8. Db2 구축 (EULA 동의 필요, 비운영 전용)
+9. Informix 구축 (EULA 동의 필요, 비운영 전용)
+10. JDK 18 이미지 구축
+11. JDK 21 이미지 구축
+12. Tomcat 이미지 구축
 
 ## 서버 측 (담당: 관리자 1인)
 
@@ -33,13 +48,22 @@
 - [x] ~~MariaDB 신규 구축 + 팀서버 경유 배포 검증~~ (2026-08-25 완료 — root/앱 계정 로그인, 권한, HEALTHCHECK 전부 확인)
 - [x] ~~MySQL/PostgreSQL/CUBRID 신규 구축 + 배포 검증~~ (2026-08-25 완료 — 관리자/앱 계정 로그인, 권한(테이블 생성/INSERT), HEALTHCHECK 전부 확인. `.sh`/`.ps1` 양쪽 검증)
 - [x] ~~Oracle XE `21c-xe`/`18c-xe` 배포 검증~~ (2026-08-26 완료 — 21c-xe는 Service Name 방식, 18c-xe는 SID 방식으로 각각 앱 계정 로그인·권한(테이블 생성/INSERT) 확인. 검증 중 실제 버그 2건 발견·수정, 아래 참고)
+- [x] ~~배포용(`-deploy`) 이미지 중복 제거~~ (2026-08-26 완료 — 상세는 아래 "이미지 중복 제거" 절 참고)
 
 ## 검증 남은 항목
 
 - [ ] MariaDB/MySQL/PostgreSQL DDL/DML(`/docker-entrypoint-initdb.d/`) 자동 실행 경로 실제 파일로 테스트 (지금까지는 파일 없이 빈 경로로만 검증. CUBRID는 이 기능 자체가 없어 대상 아님)
 - [ ] 팀원 PC 1곳 이상에서 위 "팀원 PC 각자" 체크리스트 실제로 따라해보고 문서 미비점 확인
 - [ ] (신규, 낮은 우선순위) 각 DB별로 흩어진 `deploy.*` 스크립트를 하나의 통합 진입점으로 리팩터링 — 사용자가 "대다수의 DBMS를 처리하고 그 뒤에 생각하자"고 결정해 보류 중. 논의된 구조안은 WORKLOG.md 2026-08-25 "스크립트 통합(최종 목표) 논의" 절 참고
-- [ ] (신규, 2026-08-26 발견) **배포용(`-deploy`) 이미지 중복 제거**: 지금은 base 이미지에 HEALTHCHECK만 추가하려고 매번 `docker build`로 거의 동일한 이미지를 하나 더 로컬에 만들어서, Docker Desktop에 DB당 이미지가 2개씩 보임(사용자가 실제로 발견). `docker build` 대신 `docker run --health-cmd/--health-interval/...` 플래그로 헬스체크를 지정하면 별도 빌드 없이 base 이미지를 바로 실행 가능 — 로컬 이미지 DB당 1개로 줄고 `deploy/Dockerfile` 자체도 불필요해짐. 영향 범위: oracle/mariadb/mysql/postgres/cubrid 5종의 `deploy.sh`+`.ps1`(10개 파일) + Dockerfile 5개 삭제. 적용 여부/시점 결정 대기 중
+
+## 이미지 중복 제거 (2026-08-26 완료)
+
+- 사용자가 Docker Desktop에서 DB당 이미지가 2개씩(base + `-deploy`) 뜨는 것을 발견 → 원인 확인: HEALTHCHECK만 추가하려고 매번 `docker build`로 거의 동일한 이미지를 하나 더 로컬에 만들고 있었음
+- `docker build` 대신 `docker run --health-cmd/--health-interval/--health-timeout/--health-start-period/--health-retries` 플래그로 헬스체크를 런타임에 지정 → base 이미지를 바로 실행, 로컬 이미지가 DB당 1개로 감소
+- 영향 범위: oracle/mariadb/mysql/postgres/cubrid 5종의 `deploy.sh`+`.ps1`(10개 파일) 수정, `deploy/Dockerfile` 5개 삭제. 5종 전부 `.sh`/`.ps1` 재검증(pull→run→healthy→로그인) 완료
+- **작업 중 발견한 실제 버그 2건**:
+  1. **PowerShell 네이티브 실행파일 인자 전달 시 큰따옴표가 통째로 사라짐**: `docker run @RunArgs`처럼 PowerShell 배열을 native exe(docker.exe)에 splatting할 때, 배열 원소 문자열에 포함된 `"`가 Windows 인자 전달 과정에서 소실됨(`-p"$MYSQL_ROOT_PASSWORD"`가 `-p$MYSQL_ROOT_PASSWORD`로 저장됨 — 값 자체엔 공백이 없어 우연히 안 터졌지만 비밀번호에 특수문자/공백이 있으면 깨질 뻔함). CUBRID는 하필 따옴표 안에 공백(`"SELECT 1;"`)이 있어서 인자 개수 자체가 밀려 `docker run`이 "invalid reference format" 에러로 즉시 실패 — 실제로 재현됨. **수정**: PowerShell 문자열 안에서 `"` 대신 `\"`(백슬래시 이스케이프)를 쓰면 Windows 인자 전달 과정에서 정확히 리터럴 큰따옴표로 살아남는 것을 실측 확인, mysql/postgres/cubrid/oracle 4개 `deploy.ps1` 전부 이 방식으로 수정
+  2. `mysql/deploy/deploy.ps1`의 JDBC URL(`$DbName?allowPublicKeyRetrieval=...`)에서 PowerShell이 `?`를 변수명의 일부로 잘못 해석해(`$DbName?allowPublicKeyRetrieval`을 통째로 존재하지 않는 변수로 인식) DB 이름이 URL에서 통째로 빠지는 버그 발견(직전 턴에 이 기능을 추가하며 생긴 버그) — `${DbName}`처럼 중괄호로 변수명 경계를 명시해 수정
 
 ## Oracle 추가 에디션 (2026-08-26 검증 완료)
 

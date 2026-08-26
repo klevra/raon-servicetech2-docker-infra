@@ -132,13 +132,10 @@ if ! docker pull "$REGISTRY_IMAGE"; then
   exit 1
 fi
 
-DEPLOY_IMAGE="servicetech2/oracle-deploy:${TAG}"
-info "배포용 이미지를 빌드합니다: $DEPLOY_IMAGE"
-if ! docker build --build-arg "REGISTRY_IMAGE=${REGISTRY_IMAGE}" -t "$DEPLOY_IMAGE" -f Dockerfile .; then
-  err "배포용 이미지 빌드 실패."
-  exit 1
-fi
-ok "빌드 완료: $DEPLOY_IMAGE"
+# 예전에는 여기서 HEALTHCHECK만 추가한 "배포용" 이미지를 별도로 docker build 했었다.
+# docker run --health-cmd 등으로 헬스체크를 런타임에 지정할 수 있어(빌드 없이 동일 효과),
+# base 이미지를 그대로 실행한다 -- 로컬에 이미지가 DB당 1개만 남는다 (2026-08-26 정리).
+DEPLOY_IMAGE="$REGISTRY_IMAGE"
 
 # ---------- 3. 컨테이너 이름 ----------
 echo
@@ -375,6 +372,14 @@ if [[ "$SETUP_MOUNT" -eq 1 ]]; then
     RUN_ARGS+=(-v "${STAGING_DIR}:/container-entrypoint-initdb.d:ro")
   fi
 fi
+
+# 예전 deploy/Dockerfile의 HEALTHCHECK를 그대로 옮긴 것 -- 별도 이미지 빌드 없이 동일하게 동작.
+# EE(자체 락파일 스크립트)와 XE(healthcheck.sh)가 서로 다른 체크 방식을 쓰므로, 이미지 안에
+# 실제로 존재하는 파일을 런타임에 감지해 분기한다.
+RUN_ARGS+=(
+  --health-cmd='if [ -f /opt/oracle/healthcheck.sh ]; then /opt/oracle/healthcheck.sh >/dev/null || exit 1; elif [ -n "$CHECK_DB_LOCK_FILE" ] && [ -x "$ORACLE_BASE/$CHECK_DB_LOCK_FILE" ]; then "$ORACLE_BASE/$CHECK_DB_LOCK_FILE" >/dev/null || exit 1; else exit 0; fi'
+  --health-interval=15s --health-timeout=10s --health-start-period=600s --health-retries=80
+)
 
 if [[ "$IS_EE" -eq 1 ]]; then
   RUN_ARGS+=(
