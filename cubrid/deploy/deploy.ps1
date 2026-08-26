@@ -130,12 +130,14 @@ Write-Host ""
 Write-Host "배포할 CUBRID 버전(레지스트리 태그)을 선택하세요:"
 Write-Host "  1) latest"
 Write-Host "  2) 11.4"
-Write-Host "  3) 11.3  (구버전)"
+Write-Host "  3) 11.3    (구버전)"
+Write-Host "  4) 11.4.5  (latest가 가리키는 정확한 버전 고정, 2026-08-26 기준)"
 $VerSel = Ask "번호 선택" "1"
 switch ($VerSel) {
     "1" { $Tag = "latest" }
     "2" { $Tag = "11.4" }
     "3" { $Tag = "11.3" }
+    "4" { $Tag = "11.4.5" }
     default { Write-Err2 "잘못된 선택입니다."; exit 1 }
 }
 $RegistryImage = "$LocalRegistry/$Namespace/${DbKind}:$Tag"

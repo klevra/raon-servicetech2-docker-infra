@@ -123,12 +123,14 @@ Write-Host ""
 Write-Host "배포할 PostgreSQL 버전(레지스트리 태그)을 선택하세요:"
 Write-Host "  1) latest"
 Write-Host "  2) 16"
-Write-Host "  3) 15  (구버전, 레거시 호환용)"
+Write-Host "  3) 15    (구버전, 레거시 호환용)"
+Write-Host "  4) 18.6  (latest가 가리키는 정확한 버전 고정, 2026-08-26 기준)"
 $VerSel = Ask "번호 선택" "1"
 switch ($VerSel) {
     "1" { $Tag = "latest" }
     "2" { $Tag = "16" }
     "3" { $Tag = "15" }
+    "4" { $Tag = "18.6" }
     default { Write-Err2 "잘못된 선택입니다."; exit 1 }
 }
 $RegistryImage = "$LocalRegistry/$Namespace/${DbKind}:$Tag"

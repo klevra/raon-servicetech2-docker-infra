@@ -124,12 +124,14 @@ echo
 echo "배포할 PostgreSQL 버전(레지스트리 태그)을 선택하세요:"
 echo "  1) latest"
 echo "  2) 16"
-echo "  3) 15  (구버전, 레거시 호환용)"
+echo "  3) 15    (구버전, 레거시 호환용)"
+echo "  4) 18.6  (latest가 가리키는 정확한 버전 고정, 2026-08-26 기준)"
 ask "번호 선택" "1"
 case "$REPLY" in
   1) TAG="latest" ;;
   2) TAG="16" ;;
   3) TAG="15" ;;
+  4) TAG="18.6" ;;
   *) err "잘못된 선택입니다."; exit 1 ;;
 esac
 REGISTRY_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/${DB_KIND}:${TAG}"

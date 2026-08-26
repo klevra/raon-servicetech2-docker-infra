@@ -364,7 +364,17 @@ fi
 
 # ---------- docker run 구성 ----------
 RUN_ARGS=(-d --name "$CONTAINER_NAME" -p "${LISTENER_PORT}:1521" --shm-size=1g)
-[[ "$SETUP_MOUNT" -eq 1 ]] && RUN_ARGS+=(-v "${STAGING_DIR}:/opt/oracle/scripts/setup:ro")
+if [[ "$SETUP_MOUNT" -eq 1 ]]; then
+  if [[ "$IS_EE" -eq 1 ]]; then
+    # 공식 Oracle EE 이미지(oracle/docker-images) 관례: /opt/oracle/scripts/setup
+    RUN_ARGS+=(-v "${STAGING_DIR}:/opt/oracle/scripts/setup:ro")
+  else
+    # gvenzl/oracle-xe 커뮤니티 이미지는 EE와 다른 관례를 쓴다: /container-entrypoint-initdb.d
+    # (실제 컨테이너 안 container-entrypoint.sh 코드로 확인함 — 2026-08-26. EE 경로를 그대로
+    #  쓰면 마운트는 되지만 이미지가 그 디렉토리를 전혀 스캔하지 않아 SQL이 조용히 실행 안 됨)
+    RUN_ARGS+=(-v "${STAGING_DIR}:/container-entrypoint-initdb.d:ro")
+  fi
+fi
 
 if [[ "$IS_EE" -eq 1 ]]; then
   RUN_ARGS+=(

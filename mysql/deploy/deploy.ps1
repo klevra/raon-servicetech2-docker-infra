@@ -112,13 +112,15 @@ $DbKind = "mysql"
 Write-Host ""
 Write-Host "배포할 MySQL 버전(레지스트리 태그)을 선택하세요:"
 Write-Host "  1) latest"
-Write-Host "  2) 8.4   (LTS)"
-Write-Host "  3) 8.0   (구버전 LTS, 레거시 호환용)"
+Write-Host "  2) 8.4     (LTS)"
+Write-Host "  3) 8.0     (구버전 LTS, 레거시 호환용)"
+Write-Host "  4) 26.7.0  (latest가 가리키는 정확한 버전 고정, 2026-08-26 기준)"
 $VerSel = Ask "번호 선택" "1"
 switch ($VerSel) {
     "1" { $Tag = "latest" }
     "2" { $Tag = "8.4" }
     "3" { $Tag = "8.0" }
+    "4" { $Tag = "26.7.0" }
     default { Write-Err2 "잘못된 선택입니다."; exit 1 }
 }
 $RegistryImage = "$LocalRegistry/$Namespace/${DbKind}:$Tag"

@@ -113,13 +113,15 @@ DB_KIND="mysql"
 echo
 echo "배포할 MySQL 버전(레지스트리 태그)을 선택하세요:"
 echo "  1) latest"
-echo "  2) 8.4   (LTS)"
-echo "  3) 8.0   (구버전 LTS, 레거시 호환용)"
+echo "  2) 8.4     (LTS)"
+echo "  3) 8.0     (구버전 LTS, 레거시 호환용)"
+echo "  4) 26.7.0  (latest가 가리키는 정확한 버전 고정, 2026-08-26 기준)"
 ask "번호 선택" "1"
 case "$REPLY" in
   1) TAG="latest" ;;
   2) TAG="8.4" ;;
   3) TAG="8.0" ;;
+  4) TAG="26.7.0" ;;
   *) err "잘못된 선택입니다."; exit 1 ;;
 esac
 REGISTRY_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/${DB_KIND}:${TAG}"

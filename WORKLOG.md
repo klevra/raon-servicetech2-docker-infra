@@ -330,3 +330,28 @@
 - MySQL 베이스 이미지 push 중 대용량 레이어에서 `net/http: timeout awaiting response headers` 재현(Oracle 때와 동일 증상) — 이번엔 사용자가 직접 팀서버에 등록 완료, 이쪽에서는 `docker pull`로 digest 일치만 재검증. CUBRID는 동일 증상이 재시도 2회 만에 자체 해결됨
 
 **상태**: ✅ MySQL/PostgreSQL/CUBRID 3종 배포 파이프라인 전부 실제 검증 완료 및 팀서버 레지스트리 등록 완료. 완전 무료 오픈소스 DB(MariaDB/MySQL/PostgreSQL/CUBRID) 4종 전부 구축 완료. 잔여 항목: 스크립트 통합 리팩터링(보류 중), Oracle XE/MSSQL/Db2/Informix 등 "무료지만 제약 있는" DB군은 미착수.
+
+## 2026-08-26
+
+### MySQL DBeaver 접속 오류 ("Public Key Retrieval is not allowed") 수정
+
+- 사용자가 DBeaver로 실제 접속 테스트 중 재현. 원인은 MySQL 8+ 기본 인증방식(`caching_sha2_password`)이 SSL 없는 연결에서 RSA 공개키 교환을 요구하는데, JDBC 드라이버가 보안상 기본 차단하는 것 — 컨테이너/스크립트 버그가 아니라 클라이언트 쪽 기본 설정 문제
+- `mysql/deploy/deploy.sh`·`.ps1`이 출력하는 JDBC URL 자체에 `?allowPublicKeyRetrieval=true&useSSL=false`를 포함시켜 URL을 그대로 복사해 쓰면 바로 접속되도록 수정. 이어서 사용자 요청으로 "JDBC 옵션값"과 "드라이버 옵션(DBeaver Driver properties용)"을 별도 줄로 명시적으로 추가 표기
+- 재테스트로 정상 출력 확인 후 테스트 컨테이너/이미지 정리, 사용자가 실제 DBeaver 접속 성공까지 확인
+
+### 레지스트리 이미지 정밀 버전 태그 추가
+
+- mysql/postgres/cubrid는 지금까지 `latest` 태그만 있었는데, 사용자가 "latest로 태그 달릴 애들 버전으로 추가로 달 수 있어?"라고 요청
+- 이미 로컬에 있던(레지스트리에서 재pull한) `latest` 이미지 안에서 직접 버전 확인: mysql `mysqld --version` → `26.7.0`, postgres `postgres --version` → `18.6`, cubrid `cubrid_rel` → `11.4.5`
+- 동일 이미지에 태그만 추가로 붙여 push(레이어 전부 "already exists"라 즉시 성공, 재업로드 없음). `mysql:26.7.0`/`postgres:18.6`는 Docker Hub에도 실제 존재하는 태그로 확인됨(`docker manifest inspect`), cubrid `11.4.5`는 Docker Hub엔 없고 우리 레지스트리에만 있는 태그(CUBRID는 패치 버전 단위 태그를 공식 배포하지 않음)
+- 각 DB `deploy.sh`/`.ps1`의 버전 선택 메뉴에 "옵션 4"로 이 정밀 버전을 추가해 실제로 선택·배포 가능하도록 반영
+
+### Oracle XE (21c-xe / 18c-xe) 배포 검증 — 실제 버그 2건 발견 및 수정
+
+- TODO에 있던 미검증 항목("gvenzl XE 이미지 경로로 실제 배포 테스트")을 실제로 진행. `oracle/base`, `oracle/deploy` 스크립트에는 이미 XE 분기 로직이 다 작성되어 있었으나(2026-08-21 작성 추정) 실행 검증은 한 번도 안 된 상태였음
+- 베이스 이미지 빌드+push: 21c-xe/18c-xe 둘 다 대용량 레이어에서 `net/http: timeout awaiting response headers` 재현(다른 DB들과 동일 증상) — 재시도 여러 번(21c-xe는 6회째, 18c-xe는 4회째)만에 자체 성공, `docker save`/`scp` 우회는 필요 없었음
+- **버그 1 — 앱 계정 생성 SQL이 조용히 무시됨**: `deploy.sh`/`.ps1`이 스테이징한 SQL을 항상 `/opt/oracle/scripts/setup`(공식 Oracle EE 이미지 관례)에만 마운트하고 있었는데, gvenzl XE 커뮤니티 이미지는 `container-entrypoint.sh` 코드상 `/container-entrypoint-initdb.d`를 스캔한다는 걸 실제 컨테이너 안에서 확인. EE 경로로 마운트해도 에러 없이 그냥 무시되어서, 실제 로그인 테스트(`appuser1`로 접속 시도) 전까지는 겉보기엔 배포가 "성공"한 것처럼 보였음 — 에디션별로 마운트 경로를 분기하도록 수정 후 재검증(로그인/CREATE TABLE/INSERT까지 확인)
+- **버그 2 — XE에서 healthcheck가 영원히 "unknown"**: `docker inspect`로 확인한 결과 19c EE 이미지는 자체 HEALTHCHECK(`$ORACLE_BASE/$CHECK_DB_LOCK_FILE`)가 내장돼 있지만, gvenzl XE 이미지는 `Config.Healthcheck: null` — HEALTHCHECK 자체가 없음. `oracle/deploy/Dockerfile`에 EE/XE 양쪽의 실제 체크 스크립트(`/opt/oracle/healthcheck.sh` 또는 EE의 락파일 스크립트)를 런타임에 파일 존재 여부로 감지해 분기하는 HEALTHCHECK를 추가 — 하나의 Dockerfile로 EE 기존 동작은 그대로 유지하면서 XE도 정확히 healthy 판정되도록 수정 (재검증 시 이전엔 30분 타임아웃까지 대기하던 것이 20초 만에 healthy 전환)
+- 21c-xe는 Service Name 방식, 18c-xe는 SID 방식으로 각각 앱 계정 생성 → 로그인 → `CREATE TABLE`/`INSERT`/`COMMIT`까지 실제 검증 완료. SID 방식 접속 예시 문구(`@host:port/SID` 슬래시 표기)가 문법적으로 의심스러워 보여 콜론 표기(`@host:port:SID`)와 비교 테스트했으나, XE는 SID와 동일한 이름의 서비스도 자동 등록해서 슬래시 표기가 실제로 정상 동작함을 확인(콜론 표기는 오히려 ORA-12545로 실패) — 기존 스크립트 문구가 맞았음, 수정 불필요
+- Oracle Container Registry 로그인 없이도 계정/구매 없이 완전 무료로 쓸 수 있는 경로가 실사용까지 확인된 셈 — TODO의 "Oracle XE 추가 에디션" 항목 완료 처리
+- 검증 후 테스트 컨테이너/배포용 이미지/베이스 이미지(레지스트리에는 이미 push됨) 전부 로컬 정리, 빌드 캐시도 정리
