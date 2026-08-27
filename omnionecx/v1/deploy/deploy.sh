@@ -12,10 +12,12 @@
 #   2) DB 컨테이너 생성
 #   3) DB에 DDL/DML 적용 (verifier + oacx 스키마를 "하나의 DB"에 함께 적재.
 #      실제 운영 구성과 동일 — verifier/oacx 모두 기본 DB명이 VC_VERIFIER로 통일되어 있음)
-#   4) verifier 설정값 세팅 (app/config 스테이징 + 실제 배포값 패치)
+#   4) verifier 설정값 세팅 (config는 sandbox 원본에 직접 패치, app은 원본 직접 마운트)
 #   5) verifier 기동 (+ 정상 기동까지 대기)
-#   6) oacx 설정값 세팅 (app/config 스테이징 + 실제 배포값 패치 +
+#   6) oacx 설정값 세팅 (app은 스테이징, config는 sandbox 원본에 직접 패치 +
 #      provider.json 6종의 base/partnerCode/publicKey/vc.curveType 자동 반영)
+#      -- config는 컨테이너와 별개로 원본을 직접 마운트하므로, 값을 고친 뒤
+#         컨테이너만 재시작해도(재배포 없이) 즉시 반영됨
 #   7) oacx 기동 (+ 정상 기동까지 대기)
 #
 # 데이터는 휘발성(볼륨 미사용)입니다. 비밀번호/토큰은 어떤 파일에도 저장하지 않습니다.
@@ -380,18 +382,17 @@ if ! docker pull "$JDK8_IMAGE"; then
   exit 1
 fi
 
-VF_CONFIG_STAGING="${SCRIPT_DIR}/.staging/${VF_CONTAINER}/config"
-rm -rf "$VF_CONFIG_STAGING"
-mkdir -p "$VF_CONFIG_STAGING"
-cp -r "${VERIFIER_ROOT}/config/config/." "$VF_CONFIG_STAGING/"
-DS_PROP="${VF_CONFIG_STAGING}/application-datasource.properties"
+# config는 더 이상 staging으로 복사하지 않고 sandbox 원본을 그대로 마운트한다.
+# (컨테이너를 재시작만 해도 config 수정사항이 즉시 반영되도록 하기 위함 -- WORKLOG 참고)
+VF_CONFIG_DIR="${VERIFIER_ROOT}/config/config"
+DS_PROP="$DS_SRC"
 if [[ "$UPDATE_DB_CONFIG" -eq 1 && -f "$DS_PROP" ]]; then
   sed -i -E \
     -e "s#(spring\.datasource\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^[:space:]]*#\1${DB_CONTAINER}\2${DB_NAME}#" \
     -e "s#(spring\.datasource\.hikari\.username=).*#\1${APP_USER}#" \
     -e "s#(spring\.datasource\.hikari\.password=).*#\1${APP_PASSWORD}#" \
     "$DS_PROP"
-  ok "verifier application-datasource.properties에 공용 DB 접속정보를 반영했습니다."
+  ok "verifier application-datasource.properties(원본)에 공용 DB 접속정보를 반영했습니다."
 else
   info "config 설정값 업데이트를 선택하지 않아 application-datasource.properties는 그대로 사용합니다 (DB를 이 값에 맞춰 생성했습니다)."
 fi
@@ -427,12 +428,9 @@ sed -i -E "s#(<param-value>)\./WEB-INF/config/server\.properties(</param-value>)
   "${OACX_APP_STAGING}/WEB-INF/web.xml"
 ok "oacx web.xml의 config.file을 절대경로로 패치했습니다."
 
-# ---------- config/ 스테이징 + server.properties 패치 ----------
-OACX_CONFIG_STAGING="${SCRIPT_DIR}/.staging/${OACX_CONTAINER}/config"
-rm -rf "$OACX_CONFIG_STAGING"
-mkdir -p "$OACX_CONFIG_STAGING"
-cp -r "${OACX_ROOT}/config/." "$OACX_CONFIG_STAGING/"
-SP_PROP="${OACX_CONFIG_STAGING}/server.properties"
+# ---------- config: sandbox 원본을 직접 사용 (더 이상 staging 복사 안 함) ----------
+OACX_CONFIG_DIR="${OACX_ROOT}/config"
+SP_PROP="${OACX_CONFIG_DIR}/server.properties"
 # mybatis/log 경로와 oper.mode는 이 프로젝트의 마운트 컨벤션/환경 선택에 필요한 구조적 값이라
 # config 업데이트 여부와 무관하게 항상 반영한다.
 sed -i -E \
@@ -479,7 +477,7 @@ fi
 
 PROVIDER_FILES=(coidentitydocument-provider.json comdc-provider.json comdl-provider.json comnh-provider.json comrc-provider.json coresidence-provider.json)
 for pf in "${PROVIDER_FILES[@]}"; do
-  target="${OACX_CONFIG_STAGING}/${pf}"
+  target="${OACX_CONFIG_DIR}/${pf}"
   [[ -f "$target" ]] || { warn "provider.json을 찾을 수 없습니다: $pf (건너뜁니다)"; continue; }
   sed -i -E "s#\"base\": \"[^\"]*\"#\"base\": \"http://${VF_CONTAINER}:${VF_INTERNAL_PORT}\"#" "$target"
   sed -i -E "s#\"partnerCode\": \"[^\"]*\"#\"partnerCode\": \"${PARTNER_CODE}\"#" "$target"
@@ -525,13 +523,13 @@ JDK8_IMAGE=${JDK8_IMAGE}
 VF_CONTAINER=${VF_CONTAINER}
 VF_PORT=${VF_HOST_PORT}
 VERIFIER_ROOT=${VERIFIER_ROOT}
-VF_CONFIG_STAGING=${VF_CONFIG_STAGING}
+VF_CONFIG_DIR=${VF_CONFIG_DIR}
 VF_LOG_ROOT=${VF_LOG_ROOT}
 TOMCAT_IMAGE=${TOMCAT_IMAGE}
 OACX_CONTAINER=${OACX_CONTAINER}
 OACX_HOST_PORT=${OACX_HOST_PORT}
 OACX_APP_STAGING=${OACX_APP_STAGING}
-OACX_CONFIG_STAGING=${OACX_CONFIG_STAGING}
+OACX_CONFIG_DIR=${OACX_CONFIG_DIR}
 CONTEXT_XML=${CONTEXT_XML}
 CONTEXT_PATH=${CONTEXT_PATH}
 OX_LOG_ROOT=${OX_LOG_ROOT}

@@ -461,3 +461,20 @@
 - `.sh`/`.ps1` 양쪽 모두 "config 업데이트 안 함"/"config 업데이트 함" 두 경로 전부 실전 데이터로 재검증: DB/verifier/oacx 3개 컨테이너 전부 Docker 자체 헬스체크로 `(healthy)` 상태 확인(`docker ps`), HTTP 200 확인, `.env` 파일에 비밀번호가 없음을 직접 확인
 
 **상태**: ✅ compose 전환 완료 및 `.sh`/`.ps1` 양쪽 실전 검증 완료(config 업데이트 Y/N 두 경로 모두). 컨테이너명 고정(db 기본값/verifier/oacx), 네트워크 명시적 bridge, HEALTHCHECK 기반 순서 보장까지 반영.
+
+### config 직접 마운트 전환 (staging 복사본 제거) — 설정 변경 즉시 반영
+
+**배경**: 지금까지는 verifier/oacx의 config를 매 배포 실행마다 `.staging/`으로 복사한 뒤 값을 패치해서, 그 "복사본"을 컨테이너에 마운트했다. 그래서 sandbox 원본 config 파일을 직접 고쳐도 이미 뜬 컨테이너에는 반영되지 않았고, 설정값 테스트를 반복하려면 매번 전체 스크립트를 다시 돌려야 했다.
+
+**변경**:
+- verifier의 `config/config/*` (application-datasource.properties 등)와 oacx의 `config/*` (server.properties, provider.json 6종)는 더 이상 `.staging/`으로 복사하지 않고, **sandbox 원본 디렉터리를 그대로 docker-compose 볼륨 소스로 사용**한다 (`VF_CONFIG_DIR`, `OACX_CONFIG_DIR`).
+- 기존에 하던 sed/regex 패치(DB 접속정보, mybatis/log 절대경로, oper.mode, provider.json의 base/partnerCode/publicKey/vc.curveType)는 복사본이 아니라 **원본 파일에 직접(in-place)** 적용한다. 모든 패치가 "전체 값을 치환"하는 형태라 여러 번 실행해도 결과가 같다(멱등).
+- 부수 효과: comdc-provider.json의 serviceCode처럼 스크립트가 건드리지 않는 값은 재배포해도 사라지지 않고 그대로 유지된다 (예전엔 매번 원본에서 새로 복사해 패치했으므로 이런 수동 값도 매번 새로 들어갔지만, 결과적으로 동일 — 다만 이제는 "원본 자체가 최신 상태"라는 점이 다르다).
+- 이제 컨테이너가 뜬 상태에서 sandbox의 config 파일을 직접 고치고 `docker restart <컨테이너>` (또는 `docker compose restart <service>`)만 해도 바로 반영된다. 전체 스크립트 재실행이 필요 없다.
+- 여전히 staging을 거치는 것: DB의 DDL/DML(초기화 SQL, 여러 파일을 순서대로 합치는 특성상 계속 임시 병합 필요) / oacx의 `app`(web.xml 절대경로 패치 목적, config와 무관) / 생성되는 Context XML.
+- `docker-compose.yml`의 볼륨 변수명을 `VF_CONFIG_STAGING`→`VF_CONFIG_DIR`, `OACX_CONFIG_STAGING`→`OACX_CONFIG_DIR`로 변경(의미 명확화).
+- `config_template/` 폴더는 이번에 만들지 않았음: 현재 스크립트는 verifier/oacx config가 이미 존재해야만 동작하도록 되어 있어(없으면 즉시 에러), 부트스트랩용 기본값 템플릿이 채워줄 공백이 현재는 없음. 완전히 새로운 환경을 처음부터 세팅하는 시나리오가 생기면 그때 추가 검토.
+
+**테스트**: 실제 sandbox 데이터(`D:\03. Docker\sandbox`)로 `deploy.sh`를 config 업데이트=N 경로로 end-to-end 실행. `application-datasource.properties`는 그대로 유지, `server.properties`는 mybatis/log 경로·oper.mode만 원본에 직접 반영, provider.json 6종도 원본에 직접 반영됨을 확인. `.staging/`에 더 이상 verifier/oacx config 하위 디렉터리가 생기지 않음을 확인. (DB 컨테이너가 DML 파일의 스키마명 하드코딩 오류로 기동 실패했으나, 이는 sandbox의 기존 DML 데이터 문제이며 이번 변경과 무관 — 별도 확인 필요 항목으로 남김.) 테스트 후 sandbox의 config는 원래 상태로 복원, 컨테이너/네트워크/.staging 모두 정리 완료.
+
+**상태**: ✅ config 직접 마운트 전환 완료 (`.sh`/`.ps1` 양쪽 소스 수정, `.sh`는 실전 sandbox 데이터로 검증 완료. `.ps1`은 구문 검사만 완료, 실기동 테스트는 미실시).

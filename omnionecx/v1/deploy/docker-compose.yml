@@ -2,8 +2,11 @@
 # OmnioneCX v1 통합 배포 — docker compose 템플릿
 #
 # 이 파일은 직접 실행하지 않습니다. deploy.sh/deploy.ps1이 대화형으로 값을
-# 수령하고 app/config를 스테이징·패치한 뒤, 그 결과 경로/값들을 .env 파일로
-# 써서 `docker compose --env-file <생성된 .env> up -d`로 이 템플릿을 구동합니다.
+# 수령하고 sandbox 원본 config에 직접 패치한 뒤(더 이상 임시 복사본을 만들지
+# 않음 -- config 수정 후 컨테이너 재시작만으로 반영 가능), 그 결과 경로/값들을
+# .env 파일로 써서 `docker compose --env-file <생성된 .env> up -d`로 이
+# 템플릿을 구동합니다. (DB의 DDL/DML과 oacx의 app/WEB-INF/web.xml 패치본만
+# 여전히 .staging/ 임시 디렉터리를 거칩니다.)
 #
 # 컨테이너명은 db/verifier/oacx로 고정하는 것을 기본값으로 하되(스크립트에서
 # 여전히 이름을 물어봄, 기본값만 이렇게 변경), 실제 이름은 .env의 값을 따릅니다.
@@ -43,7 +46,7 @@ services:
     volumes:
       - ${VERIFIER_ROOT}/app:/app:ro
       - ${VERIFIER_ROOT}/app/jdbc:/jdbc:ro
-      - ${VF_CONFIG_STAGING}:/config
+      - ${VF_CONFIG_DIR}:/config
       - ${VERIFIER_ROOT}/config/template:/config/template:ro
       - ${VERIFIER_ROOT}/config/license:/config/license:ro
       - ${VERIFIER_ROOT}/config/sp:/config/sp:ro
@@ -72,7 +75,7 @@ services:
       - "${OACX_HOST_PORT}:8080"
     volumes:
       - ${OACX_APP_STAGING}:/app
-      - ${OACX_CONFIG_STAGING}:/config:ro
+      - ${OACX_CONFIG_DIR}:/config:ro
       - ${CONTEXT_XML}:/usr/local/tomcat/conf/Catalina/localhost/${CONTEXT_PATH}.xml:ro
       - ${OX_LOG_ROOT}/tomcat:/usr/local/tomcat/logs
       - ${OX_LOG_ROOT}/app:/logs/app

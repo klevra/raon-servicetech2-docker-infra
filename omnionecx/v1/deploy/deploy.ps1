@@ -13,10 +13,12 @@
     2) DB 컨테이너 생성
     3) DB에 DDL/DML 적용 (verifier + oacx 스키마를 "하나의 DB"에 함께 적재.
        실제 운영 구성과 동일 -- verifier/oacx 모두 기본 DB명이 VC_VERIFIER로 통일되어 있음)
-    4) verifier 설정값 세팅 (app/config 스테이징 + 실제 배포값 패치)
+    4) verifier 설정값 세팅 (config는 sandbox 원본에 직접 패치, app은 원본 직접 마운트)
     5) verifier 기동 (+ 정상 기동까지 대기)
-    6) oacx 설정값 세팅 (app/config 스테이징 + 실제 배포값 패치 +
+    6) oacx 설정값 세팅 (app은 스테이징, config는 sandbox 원본에 직접 패치 +
        provider.json 6종의 base/partnerCode/publicKey/vc.curveType 자동 반영)
+       -- config는 컨테이너와 별개로 원본을 직접 마운트하므로, 값을 고친 뒤
+          컨테이너만 재시작해도(재배포 없이) 즉시 반영됨
     7) oacx 기동 (+ 정상 기동까지 대기)
 
   데이터는 휘발성(볼륨 미사용)입니다. 비밀번호/토큰은 어떤 파일에도 저장하지 않습니다.
@@ -362,19 +364,18 @@ Write-Info "레지스트리에서 verifier 실행 이미지를 내려받는 중�
 docker pull $Jdk8Image
 if ($LASTEXITCODE -ne 0) { Write-Err2 "이미지를 가져오지 못했습니다. 먼저 jdk8/base/build-and-push.ps1 를 실행하세요."; exit 1 }
 
-$VfConfigStaging = Join-Path $ScriptDir ".staging\$VfContainer\config"
-if (Test-Path $VfConfigStaging) { Remove-Item -Recurse -Force $VfConfigStaging }
-New-Item -ItemType Directory -Force -Path $VfConfigStaging | Out-Null
-Copy-Item -Path (Join-Path $VerifierRoot "config\config\*") -Destination $VfConfigStaging -Recurse -Force
+# config는 더 이상 staging으로 복사하지 않고 sandbox 원본을 그대로 마운트한다.
+# (컨테이너를 재시작만 해도 config 수정사항이 즉시 반영되도록 하기 위함 -- WORKLOG 참고)
+$VfConfigDir = Join-Path $VerifierRoot "config\config"
 
-$DsProp = Join-Path $VfConfigStaging "application-datasource.properties"
+$DsProp = $DsSrc
 if ($UpdateDbConfig -and (Test-Path $DsProp)) {
     $dsContent = Read-Utf8File $DsProp
     $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^\s]*', ('${1}' + $DbContainer + '${2}' + $DbName))
     $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.hikari\.username=).*', ('${1}' + $AppUser))
     $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.hikari\.password=).*', ('${1}' + $AppPassword))
     Write-Utf8File $DsProp $dsContent
-    Write-Ok "verifier application-datasource.properties에 공용 DB 접속정보를 반영했습니다."
+    Write-Ok "verifier application-datasource.properties(원본)에 공용 DB 접속정보를 반영했습니다."
 } else {
     Write-Info "config 설정값 업데이트를 선택하지 않아 application-datasource.properties는 그대로 사용합니다 (DB를 이 값에 맞춰 생성했습니다)."
 }
@@ -412,13 +413,10 @@ $webXmlContent = [regex]::Replace($webXmlContent, '(<param-value>)\./WEB-INF/con
 Write-Utf8File $WebXml $webXmlContent
 Write-Ok "oacx web.xml의 config.file을 절대경로로 패치했습니다."
 
-# ---------- config/ 스테이징 + server.properties 패치 ----------
-$OacxConfigStaging = Join-Path $ScriptDir ".staging\$OacxContainer\config"
-if (Test-Path $OacxConfigStaging) { Remove-Item -Recurse -Force $OacxConfigStaging }
-New-Item -ItemType Directory -Force -Path $OacxConfigStaging | Out-Null
-Copy-Item -Path (Join-Path $OacxRoot "config\*") -Destination $OacxConfigStaging -Recurse -Force
+# ---------- config: sandbox 원본을 직접 사용 (더 이상 staging 복사 안 함) ----------
+$OacxConfigDir = Join-Path $OacxRoot "config"
 
-$SpProp = Join-Path $OacxConfigStaging "server.properties"
+$SpProp = Join-Path $OacxConfigDir "server.properties"
 $spContent = Read-Utf8File $SpProp
 # mybatis/log 경로와 oper.mode는 이 프로젝트의 마운트 컨벤션/환경 선택에 필요한 구조적 값이라
 # config 업데이트 여부와 무관하게 항상 반영한다.
@@ -468,7 +466,7 @@ if (Test-Path $DidFile) {
 
 $ProviderFiles = @("coidentitydocument-provider.json", "comdc-provider.json", "comdl-provider.json", "comnh-provider.json", "comrc-provider.json", "coresidence-provider.json")
 foreach ($pf in $ProviderFiles) {
-    $target = Join-Path $OacxConfigStaging $pf
+    $target = Join-Path $OacxConfigDir $pf
     if (-not (Test-Path $target)) { Write-Warn2 "provider.json을 찾을 수 없습니다: $pf (건너뜁니다)"; continue }
     $pc = Read-Utf8File $target
     $pc = [regex]::Replace($pc, '"base": "[^"]*"', ('"base": "http://' + $VfContainer + ':' + $VfInternalPort + '"'))
@@ -517,13 +515,13 @@ JDK8_IMAGE=$Jdk8Image
 VF_CONTAINER=$VfContainer
 VF_PORT=$VfHostPort
 VERIFIER_ROOT=$VerifierRoot
-VF_CONFIG_STAGING=$VfConfigStaging
+VF_CONFIG_DIR=$VfConfigDir
 VF_LOG_ROOT=$VfLogRoot
 TOMCAT_IMAGE=$TomcatImage
 OACX_CONTAINER=$OacxContainer
 OACX_HOST_PORT=$OacxHostPort
 OACX_APP_STAGING=$OacxAppStaging
-OACX_CONFIG_STAGING=$OacxConfigStaging
+OACX_CONFIG_DIR=$OacxConfigDir
 CONTEXT_XML=$ContextXml
 CONTEXT_PATH=$ContextPath
 OX_LOG_ROOT=$OxLogRoot
