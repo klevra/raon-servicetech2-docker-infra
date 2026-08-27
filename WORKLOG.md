@@ -366,3 +366,20 @@
 - 결과: 로컬 이미지가 DB당 1개로 감소, `docker build` 단계가 사라져 배포도 약간 빨라짐, `deploy/Dockerfile` 5개는 저장소에서 삭제
 
 **상태**: ✅ 이미지 중복 제거 리팩터링 + 실사용 중 발견한 PowerShell 인자 전달 버그 2건 수정 완료.
+
+## 2026-08-27
+
+### 팀서버 레지스트리 볼륨화 + 재시작 정책 적용
+
+- TODO #1(레지스트리 컨테이너에 볼륨/재시작 정책 없음) 해결. 사용자가 서버에서 직접 작업(rootful docker, `sudo -i`로 root 전환), 이쪽은 절차 설계 + 명령어 제공 + 최종 검증 담당
+- 절차: 기존 컨테이너 `stop` → `docker cp registry:/var/lib/registry/. <호스트경로>`로 데이터를 먼저 안전하게 백업 → `rm` → `-v <호스트경로>:/var/lib/registry --restart=always`로 재생성. 저장 경로는 특정 사용자 홈 대신 시스템 레벨(`/opt/servicetech2-registry/data`)을 추천해 채택
+- `docker run`이 예상보다 오래 걸려 사용자가 문의 — 서버가 Oracle Linux(`ol-root` LVM)라 SELinux Enforcing에 의한 bind mount relabel 지연을 의심했으나, `getenforce` 확인 결과 **Disabled**라 해당 없음으로 판명. `iostat -x`로 실제 디스크 쓰기가 발생 중임을 확인해 "멈춘 게 아니라 진행 중"이라고 안내, 계속 대기하도록 함 — 결과적으로 컨테이너는 정상적으로 떴고 CLI foreground 리턴만 늦었던 것으로 정리
+- 검증: 서버에서 `curl .../v2/_catalog`로 5개 레포(cubrid/mariadb/mysql/oracle/postgres) 전부 확인, `mariadb/tags/list`로 기존 태그(10.11/11.4/latest) 그대로 확인. 이 PC에서도 로컬 캐시 삭제 후 `docker pull`로 재검증 — digest(`sha256:bb62168a...`)가 마이그레이션 전과 완전히 동일함을 확인해 데이터 무결성 검증 완료
+
+### JDK/Tomcat/DB 통합 배포(compose) 설계 논의 시작
+
+- 사용자가 요구사항 구체화: JDK 이미지 + Tomcat 이미지 + DB를 docker compose로 묶어 한 번에 기동. 기동 순서는 DB → JDK → Tomcat이며, 버전/앱 종류에 따라 "DB → JDK(verifier)"만 쓰는 경로와 "DB → Tomcat(oacx) 또는 JDK(oacx)"처럼 갈라지는 경로가 있음 (기존 로컬에 있던 `mdl_verifier`/`mdl_oacx` 등 구(舊) 스택을 정식 3단계 레지스트리 패턴으로 이관하는 작업으로 파악)
+- JDK 이미지 실행 시 `app_path`/`config_path`/`log_path` 3개 볼륨 마운트 경로 + `port_nbr`을 지정해야 함 (기존 TODO 항목과 일치)
+- 서버 측 검토: 새 네임스페이스(`servicetech2/jdk18`, `jdk21`, `tomcat`)는 기존 DB와 동일하게 공식 이미지 재태깅만 하면 됨 — 앱(JAR/WAR) 자체는 이미지에 안 들어가고 `app_path`로 런타임 주입. 서버에 새 포트 오픈은 불필요(컨테이너는 개발자 PC에서 기동). 디스크 용량은 스크린샷으로 확인 — `/` 495G 중 448G 여유로 전혀 문제 없음
+- 작업 PC 측 검토: (1) compose 스택 내부에서는 DB 접속을 `localhost:포트`가 아니라 **compose 서비스명**으로 해야 함(기존 개별 deploy 스크립트와의 중요한 차이점), (2) `depends_on: condition: service_healthy`로 순서를 강제하려면 JDK/Tomcat 쪽에도 자체 헬스체크가 필요, (3) 여러 조합(verifier만 / oacx+tomcat 등)은 compose `profiles:` 기능으로 하나의 파일에서 선택적으로 켜는 방식을 제안, (4) Windows 경로 마운트 시 기존에 겪은 MSYS/PowerShell 경로 이슈 재발 가능성 안내
+- **결정 대기 중**: (1) verifier/oacx가 헬스체크 가능한 엔드포인트를 갖고 있는지, (2) JDK 이미지가 마운트된 JAR을 찾는 방식(파일명 고정/환경변수/글롭), (3) config_path에 들어갈 접속정보 파일을 누가 준비하는지 — 이 세 가지가 정해져야 실제 `jdk/`, `tomcat/`, `compose/` 구현 착수 가능

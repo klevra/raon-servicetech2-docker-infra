@@ -1,6 +1,6 @@
 # TODO: 팀서버 레지스트리 배포 잔여 체크리스트
 
-- 작성일: 2026-08-21 / 최종 수정: 2026-08-26 (Oracle XE 21c/18c 검증 완료, mysql/postgres/cubrid 정밀 버전 태그 추가, 배포용 이미지 중복 제거)
+- 작성일: 2026-08-21 / 최종 수정: 2026-08-27 (팀서버 레지스트리 볼륨화+재시작 정책 완료)
 - 목적: "팀서버 레지스트리 → 방화벽 오픈 → 이미지 등록 → 각 PC에서 스크립트로 원샷 배포" 최종 목표까지 남은 작업 정리
 - 관련 문서: [PHASE-D-FIREWALL-APPROVAL.md](PHASE-D-FIREWALL-APPROVAL.md), [registry-server/linux-registry-setup.md](registry-server/linux-registry-setup.md), [oracle/PRD.md](oracle/PRD.md)
 
@@ -8,7 +8,7 @@
 
 ## 잔여 항목 요약 (번호순, 2026-08-26 기준)
 
-1. 레지스트리 볼륨/재시작 정책 결정 (서버 측)
+1. ~~레지스트리 볼륨/재시작 정책 결정~~ — ✅ 완료
 2. 레지스트리 인증(htpasswd) 적용 여부 (서버 측, 선택)
 3. hosts/insecure-registries 등록 등 팀원 PC 사전 준비 실사용 검증
 4. MariaDB/MySQL/PostgreSQL DDL/DML 실제 파일 테스트
@@ -25,7 +25,7 @@
 
 - [x] ~~팀장님 휴가 복귀 대기 → 방화벽 오픈 승인~~ (2026-08-25 완료)
 - [x] ~~팀서버(`new-servicetech2-1`, `192.168.0.168`) 인바운드 5000/tcp 오픈~~ (2026-08-25 완료, 실제 접속 검증까지 완료)
-- [ ] (검토 필요) 현재 팀서버 `registry` 컨테이너에 **볼륨 마운트도 `--restart` 정책도 없음** — 컨테이너 삭제/서버 재부팅 시 이미지 유실 위험. 데이터 영속화 + 자동 재시작 적용 여부 결정
+- [x] ~~팀서버 `registry` 컨테이너에 볼륨 마운트 + `--restart=always` 적용~~ (2026-08-27 완료 — `docker cp`로 기존 데이터를 `/opt/servicetech2-registry/data`로 안전하게 옮긴 뒤 컨테이너 재생성. `_catalog`/`tags/list`로 5개 레포·전체 태그 그대로 확인, 이 PC에서 `docker pull`로 digest 일치까지 재검증 완료. Oracle Linux라 SELinux 관련 지연을 의심했으나 `getenforce` 결과 Disabled로 확인 — 실제로는 `docker run`의 foreground 리턴이 늦어진 것뿐, 컨테이너 자체는 정상 기동했음)
 - [ ] (선택) 현재 레지스트리 인증 없음(사내망 신뢰 전제) — 필요 시 `REGISTRY_AUTH=htpasswd` 적용 검토 ([linux-registry-setup.md](registry-server/linux-registry-setup.md) 5절 참고)
 - [x] ~~Oracle 19c EE 베이스 이미지를 팀서버 레지스트리에 push~~ (2026-08-25 완료 — 네트워크 push는 반복 타임아웃 나서 `docker save`→`scp`→서버에서 `load`/`push` 방식으로 우회 성공. `oracle/base/build-and-push.*`로 직접 push 재시도는 여전히 타임아웃 날 수 있음, 안 되면 같은 우회법 사용)
 - [x] ~~MariaDB 베이스 이미지(latest/11.4/10.11) 팀서버 레지스트리에 push~~ (2026-08-25 완료, 이건 이미지가 작아서 직접 push로 문제없이 성공)
