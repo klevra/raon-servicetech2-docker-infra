@@ -1,0 +1,89 @@
+# ============================================================================
+# OmnioneCX v1 통합 배포 — docker compose 템플릿
+#
+# 이 파일은 직접 실행하지 않습니다. deploy.sh/deploy.ps1이 대화형으로 값을
+# 수령하고 app/config를 스테이징·패치한 뒤, 그 결과 경로/값들을 .env 파일로
+# 써서 `docker compose --env-file <생성된 .env> up -d`로 이 템플릿을 구동합니다.
+#
+# 컨테이너명은 db/verifier/oacx로 고정하는 것을 기본값으로 하되(스크립트에서
+# 여전히 이름을 물어봄, 기본값만 이렇게 변경), 실제 이름은 .env의 값을 따릅니다.
+# 네트워크는 명시적으로 bridge 드라이버 사용(외부 통신 확인 완료, WORKLOG 참고).
+# ============================================================================
+services:
+  db:
+    image: ${DB_IMAGE}
+    container_name: ${DB_CONTAINER}
+    networks: [omnionecx]
+    ports:
+      - "${DB_PORT}:3306"
+    volumes:
+      - ${DB_INITDB_DIR}:/docker-entrypoint-initdb.d:ro
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${APP_USER}
+      MARIADB_PASSWORD: ${APP_PASSWORD}
+      TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized || exit 1"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  verifier:
+    image: ${JDK8_IMAGE}
+    container_name: ${VF_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${VF_PORT}:${VF_PORT}"
+    volumes:
+      - ${VERIFIER_ROOT}/app:/app:ro
+      - ${VERIFIER_ROOT}/app/jdbc:/jdbc:ro
+      - ${VF_CONFIG_STAGING}:/config
+      - ${VERIFIER_ROOT}/config/template:/config/template:ro
+      - ${VERIFIER_ROOT}/config/license:/config/license:ro
+      - ${VERIFIER_ROOT}/config/sp:/config/sp:ro
+      - ${VERIFIER_ROOT}/config/fonts:/config/fonts:ro
+      - ${VF_LOG_ROOT}:/logs
+    environment:
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/
+      LOGGING_FILE_PATH: /logs
+      LOADER_PATH: /jdbc
+      APP_JAR_GLOB: mdl-verifier-1.*.jar
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${VF_PORT}/"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+
+  oacx:
+    image: ${TOMCAT_IMAGE}
+    container_name: ${OACX_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      verifier:
+        condition: service_healthy
+    ports:
+      - "${OACX_HOST_PORT}:8080"
+    volumes:
+      - ${OACX_APP_STAGING}:/app
+      - ${OACX_CONFIG_STAGING}:/config:ro
+      - ${CONTEXT_XML}:/usr/local/tomcat/conf/Catalina/localhost/${CONTEXT_PATH}.xml:ro
+      - ${OX_LOG_ROOT}/tomcat:/usr/local/tomcat/logs
+      - ${OX_LOG_ROOT}/app:/logs/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/${CONTEXT_PATH}/"]
+      interval: 5s
+      timeout: 5s
+      start_period: 90s
+      retries: 24
+
+networks:
+  omnionecx:
+    name: ${NETWORK_NAME}
+    driver: bridge

@@ -20,6 +20,9 @@ oracle/base/.env
 # docker save로 생성되는 대용량 이미지 tar 파일 (수동 전송용, 절대 커밋 금지)
 *.tar
 
+# 로컬 빌드 산출물 (Maven 등으로 재생성 가능, 커밋 대상 아님)
+**/sample/out/
+
 # OS/에디터 잡동사니
 .DS_Store
 Thumbs.db

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  oacx v1 최소 샘플 (Tomcat 9 + WAR, javax.servlet 기반)
+
+  목적: OmnioneCX 1.0.0.## oacx 배포 파이프라인(3경로 마운트 + 포트 +
+        healthcheck)을 실제 oacx WAR이 준비되기 전에 검증하기 위한 최소 샘플.
+        진짜 oacx가 준비되면 이 샘플을 그대로 교체한다.
+        Tomcat 9는 javax.servlet.* 네임스페이스를 쓴다. Tomcat 10부터는
+        jakarta.servlet.*으로 바뀌므로 나중에 버전 올릴 때 주의할 것.
+  ============================================================================
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.servicetech2</groupId>
+  <artifactId>oacx-sample</artifactId>
+  <version>1.0.0</version>
+  <packaging>war</packaging>
+
+  <properties>
+    <maven.compiler.source>1.8</maven.compiler.source>
+    <maven.compiler.target>1.8</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>javax.servlet</groupId>
+      <artifactId>javax.servlet-api</artifactId>
+      <version>4.0.1</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>oacx</finalName>
+  </build>
+</project>

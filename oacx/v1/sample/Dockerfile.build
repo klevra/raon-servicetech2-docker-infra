@@ -1,0 +1,18 @@
+# ============================================================================
+# oacx v1 샘플 WAR 빌드 전용 Dockerfile (로컬에 Maven 설치 없이 빌드하기 위함)
+#
+# 결과물(WAR)만 뽑아내는 용도 -- 이 이미지 자체는 레지스트리에 올리지 않는다.
+# 실제 배포는 servicetech2/tomcat:9 (범용 런타임) + app_path 마운트로 진행한다.
+#
+# 빌드 + WAR 추출 예:
+#   docker build --target artifact --output type=local,dest=./out -f Dockerfile.build .
+#   → ./out/oacx.war 생성됨
+# ============================================================================
+FROM maven:3.9-eclipse-temurin-8 AS build
+WORKDIR /build
+COPY pom.xml .
+COPY src ./src
+RUN mvn -B -q package -DskipTests
+
+FROM scratch AS artifact
+COPY --from=build /build/target/oacx.war /oacx.war

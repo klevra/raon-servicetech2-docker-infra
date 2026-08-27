@@ -383,3 +383,81 @@
 - 서버 측 검토: 새 네임스페이스(`servicetech2/jdk18`, `jdk21`, `tomcat`)는 기존 DB와 동일하게 공식 이미지 재태깅만 하면 됨 — 앱(JAR/WAR) 자체는 이미지에 안 들어가고 `app_path`로 런타임 주입. 서버에 새 포트 오픈은 불필요(컨테이너는 개발자 PC에서 기동). 디스크 용량은 스크린샷으로 확인 — `/` 495G 중 448G 여유로 전혀 문제 없음
 - 작업 PC 측 검토: (1) compose 스택 내부에서는 DB 접속을 `localhost:포트`가 아니라 **compose 서비스명**으로 해야 함(기존 개별 deploy 스크립트와의 중요한 차이점), (2) `depends_on: condition: service_healthy`로 순서를 강제하려면 JDK/Tomcat 쪽에도 자체 헬스체크가 필요, (3) 여러 조합(verifier만 / oacx+tomcat 등)은 compose `profiles:` 기능으로 하나의 파일에서 선택적으로 켜는 방식을 제안, (4) Windows 경로 마운트 시 기존에 겪은 MSYS/PowerShell 경로 이슈 재발 가능성 안내
 - **결정 대기 중**: (1) verifier/oacx가 헬스체크 가능한 엔드포인트를 갖고 있는지, (2) JDK 이미지가 마운트된 JAR을 찾는 방식(파일명 고정/환경변수/글롭), (3) config_path에 들어갈 접속정보 파일을 누가 준비하는지 — 이 세 가지가 정해져야 실제 `jdk/`, `tomcat/`, `compose/` 구현 착수 가능
+
+### verifier 실제 프로덕션 JAR + 실제 DB 통합 테스트 (mdl-verifier-1.3.42.jar)
+
+- 위 결정 대기 항목을 실제 검증으로 해소하기 위해, 최소 stand-in 샘플 대신 **실제 프로덕션 verifier JAR**(`mdl-verifier-1.3.42.jar`)과 실제 DDL/DML(`D:\03. Docker\sandbox\ddl\mdl-verifier-mariadb.sql`, `dml\insert-init-data.sql`)로 곧바로 실전 테스트 진행. MariaDB 컨테이너(DB명 `VC_VERIFIER`, 앱 계정 `klevra`/`theg3p2`)를 커스텀 브리지 네트워크로 verifier와 묶어 컨테이너명 통신 확인
+- **JDBC 드라이버 공백 발견**: verifier가 번들한 드라이버(oracle/mysql/mssql/postgres/tibero/goldilocks)에 MariaDB Connector/J가 없음 — Maven Central에서 `mariadb-java-client-3.3.3.jar`를 직접 받아 `LOADER_PATH`(Spring Boot PropertiesLauncher의 additive 클래스패스)로 외부 주입해 해결. `SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/`도 같은 additive 방식으로 외부 설정 디렉터리를 추가(기존 classpath 번들 설정은 그대로 유지한 채 override)
+- **ddl-auto=validate 문제**: 실제 JPA 엔티티 10종과 정확히 일치해야 하는 `validate` 모드는 엔티티를 역공학할 수 없어 위험 판단 → 사용자 지시로 `ddl-auto=none`, 스키마는 이미 갖고 있는 실제 DDL/DML로 대체
+- **`verifier.tar.gz`(실제 배포 서버의 살아있는 config) 발견 및 병합**: `config/sp`(wallet/did 파일), `application-*.properties`의 실제 값(블록체인 노드 주소, wallet 경로/비밀번호/key-id, jasypt 암호화 키 등)을 우리 config에 반영. 이 과정에서 발견/수정한 이슈들:
+  - `application-sp.properties`와 `application-mdl-sp.properties`가 `mdl.sp.*` 네임스페이스를 **중복 정의**하고 있어, 한쪽만 값을 채우면 로드 순서에 따라 빈 값으로 덮어써지는 위험 확인(초기엔 mdl-sp를 비활성화로 "회피"했다가, 사용자가 "mdl-sp는 활성화 상태여야 한다"고 정정 — 최종적으로 두 파일의 모든 겹치는 키를 완전 동기화하는 방향으로 해결, 기동 시간도 98초→38초로 단축됨을 확인)
+  - VCConverter 라이선스 오류 → 실제 `.rsl` 라이선스 파일 + 디자인 템플릿 7종을 `config/license`, `config/template`에 배치, `application-converter.yml`의 경로 설정
+  - CA 앱 목록 조회 실패 → 실제 도메인 값 채움 + 사용자 지시로 `ca-list-data-cron-enabled=false`(개발서버 다운 상태)
+  - 폰트 외부화 요청 → `config/fonts`(PretendardGOV 9종) 추가, `use-font-file=true` + `font-dir-path=/config/fonts`
+- 최종 부팅 성공: `Started MdlApiApplication in 38.407 seconds`, 에러 0건, `curl` 200 확인. **sandbox 원본 템플릿**(`application-sp/mdl-sp.properties`)에도 "ca-list-domain이 빈 값인데 cron-enabled 기본값이 true"인 조합 자체가 함정이라는 걸 반영해 기본값을 `false`로 수정(실제 도메인 값은 환경별이라 템플릿엔 반영 안 함)
+
+### 마운트 구조 확정 — sandbox/verifier를 "실제 배포 소스"로 정리
+
+- verifier 통합 테스트 성공 후, 사용자가 마운트 구조를 반복 정제 요청 — 최종적으로 `D:\03. Docker\sandbox\verifier\`가 `app/`(JAR+jdbc 드라이버)와 `config/`(하위에 `config/`, `template/`, `license/`, `sp/`, `fonts/` 5개 서브폴더, 각각 컨테이너의 `/config`, `/config/template`, `/config/license`, `/config/sp`, `/config/fonts`에 개별 바인드마운트)로 정리됨
+- **발견한 마운트 순서 함정**: `/config`를 `:ro`로 마운트하면 그 하위에 `/config/template` 등 새 마운트포인트를 만들 수 없어 컨테이너 생성 자체가 실패 — 최상위(`/config`)만 rw로 마운트하고, 실제 파일 보호는 하위 4개 개별 마운트의 `:ro`로 담당하는 구조로 해결
+- 재구성 과정에서 실제 앱 포트가 8080이 아니라 **48085**(`api-server-domain`에 박혀있던 값과 동일)라는 걸 재확인, 포트 매핑 정정
+
+### verifier deploy.sh/.ps1 정식 스크립트화
+
+- 위 실전 테스트를 반복 가능한 스크립트로 정식화. `Dockerfile`은 `sandbox/verifier`에 위치(COPY 없음 — `app/config/jdbc/logs`는 전부 런타임 바인드마운트, `/app` 안에서 `mdl-verifier-1.*.jar`를 glob으로 찾아 정확히 1개일 때만 실행). DB 설정(파트너 코드/DDL 체크/DML 자동 패치), 포트, 운영·개발 여부 등을 대화형으로 입력받도록 구성
+- **실제 버그 발견/수정**: (1) `application-datasource.properties`에 이전 테스트용 호스트명이 하드코딩돼 있어 새 컨테이너명과 불일치 → DB 연결 자체 실패 — 원본은 그대로 두고 매 실행마다 스테이징 사본을 패치하는 방식으로 해결. (2) `curl ... || echo "000"` 패턴이 드물게 "200"+"000"이 이어붙어 `200000`으로 찍히는 버그 → 정규식으로 3자리 숫자 검증하도록 수정
+- **`.ps1` 작성 중 발견한 환경 이슈**: Write 도구로 새로 만든 `.ps1`은 UTF-8 **BOM 없이** 저장되는데, Windows PowerShell 5.1은 BOM이 없으면 시스템 코드페이지로 파일을 읽어 한글 주석/문자열을 오염시키고, 그 결과로 파서가 멀쩡한 문법 줄에서도 엉뚱한 문법 에러를 냄(원인 파악에 상당한 시간 소요, 최종적으로 BOM 포함 재저장만으로 모든 에러가 한 번에 해소됨 확인) — 메모리에 기록해 향후 신규 `.ps1` 작성 시 항상 BOM을 붙이도록 함
+
+### OACX(Tomcat) 배포 파이프라인 신규 구축 + provider.json 실사용 설정
+
+- `oacx.tar.gz`(실제 WAR 배포본)를 `app/`(WEB-INF 등)과 `config/`(provider.json 다수, mybatis, logback.xml, server.properties, toss-sec)로 분리해 verifier와 동일한 컨벤션으로 정리
+- **Tomcat 배포 방식 결정**: `webapps/oacx` 직접 마운트 대신 `conf/Catalina/localhost/oacx.xml`에 `docBase="/app"` Context를 등록하는 방식 채택(uniform `/app`,`/config`,`/logs` 마운트 유지). `web.xml`의 `config.file=./WEB-INF/config/server.properties`(상대경로)는 배포 스크립트가 스테이징 시점에 `/config/server.properties`(절대경로)로 패치(원본 미변경)
+- 이미지는 커스텀 빌드 없이 공식 `tomcat:9-jdk8-temurin` 그대로 사용(ENTRYPOINT 커스터마이징 불필요)
+- **실제 데이터 버그 발견**: `01.insert_data.sql`의 `OACX_PROVIDER` INSERT 중 `PROVIDER_ID` 값이 `cotcotoss-identifyoss`(21자, 중복 오타로 추정)로 `varchar(20)` 컬럼을 초과해 INSERT 실패 → 사용자 확인 결과 **DDL 쪽 컬럼 길이 설계 실수**로 판명(`varchar(20)`→`varchar(25)`로 수정, 실제 최대 데이터 길이 21자라 데이터는 그대로 두어도 됨)
+- 최초 부팅 성공: `Server startup in [129086] milliseconds`, `HTTP 응답 확인: 200`, `OACX_PROVIDER` 28건 정상 적재
+- **OPER_SORT 개발/운영 자동화**: 배포 스크립트가 개발/운영 선택에 따라 DML의 `OACX_PROVIDER.OPER_SORT`('ent' 컬럼 바로 다음)를 `dev`/`prod`로 자동 치환(개발 기본값) — `'ent'` 앵커를 기준으로 정규식 매칭해 NULL/따옴표 유무가 섞인 컬럼 구성에도 안전하게 동작
+- **provider.json 6종 실사용 설정**(coidentitydocument/comdc/comdl/comnh/comrc/coresidence): `services.authen.urls.base`를 verifier 컨테이너로, `publicKey`/`vc.curveType`을 verifier의 실제 did 파일(`raondev2.sp.did`/`raonEnt.did`)의 `verificationMethod.publicKeyBase58`/`type`에서 자동 추출해 반영(dev/prod에 따라 did 파일 자동 선택), `partnerCode`는 verifier와 동일 값으로 통일. 이 과정에서 **실제 설정 버그 2건 추가 발견**: comdl/comnh 두 파일의 `vc.curveType`이 실제로는 `SECP256_K1`이어야 하는데 `SECP256_R1`로 잘못 설정돼 있었음(두 did 파일 모두 `Secp256k1VerificationKey2018` 타입), `webToAppRequest`가 4개 파일에서 `web2appsspay`(오타)로 잘못 설정 — 전부 자동 반영 로직에서 정정. `serviceCode`는 인증사업자별 고유값이라 자동화 대상에서 제외(수기 입력 대상으로 명시, comdc는 현재 빈 값)
+- oacx↔verifier가 서로 다른 네트워크에 있으면 컨테이너명 통신이 안 되는 문제를 발견해 `docker network connect`로 즉시 해결하고, 이후 배포 스크립트 자체에 네트워크 연동 옵션을 추가해 자동화
+
+### OmnioneCX 통합 배포 스크립트(`omnionecx/v1/deploy/`) — DB 1개 + verifier + oacx
+
+- 사용자가 제시한 7단계(①설정값 일괄 수령 ②DB 생성 ③DDL/DML 적용 ④verifier 설정 ⑤verifier 기동 ⑥oacx 설정 ⑦oacx 기동)를 검토 후, 네트워크 생성/헬스체크 대기/partnerCode 및 publicKey·curveType 자동 전파 등을 보강 사항으로 반영해 그대로 채택
+- **DB 통합 방침 확정**: 사용자 확인에 따라 verifier/oacx가 하나의 DB(`VC_VERIFIER`, 실제 운영 config의 기본값과 동일)를 공유 — 실제 스키마 검증 결과 `VF_*`(12개)와 `OACX_*`(14개) 테이블이 이름 충돌 없이 정상 공존함을 확인. verifier DDL에 하드코딩된 `CREATE DATABASE`/`USE` 문은 실제 선택한 DB명으로 자동 정규화하는 로직 추가(다른 DB명을 선택해도 안전)
+- **JDK8/JDK21/Tomcat 베이스 이미지 신규 구축 + 레지스트리 등록**: `jdk8/base`, `jdk21/base`(둘 다 `APP_JAR_GLOB` 환경변수로 앱마다 다른 JAR 이름 패턴을 지정할 수 있게 일반화한 glob 엔트리포인트), `tomcat/base`(공식 이미지 재태깅, 커스터마이징 없음) — 전부 `servicetech2` 레지스트리에 push 완료(`jdk8:latest`, `jdk21:latest`, `tomcat9-jdk8:9-jdk8`). 이후 verifier/oacx 배포는 로컬 빌드 없이 레지스트리에서 pull만 하도록 전환
+- `deploy.sh` 작성 후 실전 데이터로 전체 스택 실행 검증: DB(공유)→verifier(30초 부팅, HTTP 200)→oacx(198초 부팅, HTTP 200), `VF_ORGANIZATION.PARTNER_CODE`/`OACX_PROVIDER.OPER_SORT` 자동 반영 확인. HTTP 체크가 "Server startup" 로그 직후 포트 accept 전이라 드물게 000이 뜨는 걸 발견해 짧은 재시도 로직 추가
+- **`deploy.ps1` 포팅 중 발견한 2번째 인코딩 버그**: `.ps1` 자체는 BOM을 붙여 저장했지만, 스크립트가 **런타임에 읽고 쓰는 SQL/properties/json 파일**(전부 BOM 없는 UTF-8)을 `Get-Content -Encoding utf8`/`Set-Content -Encoding utf8`로 처리하면서 Windows PowerShell 5.1이 시스템 코드페이지로 잘못 디코딩 — 한글 주석이 깨진 SQL을 MariaDB가 파싱하다 실제로 `ERROR 1064` 문법 에러를 냄(bash 버전은 동일 로직인데 문제 없었음 — bash는 바이트를 그대로 다루기 때문). `[System.IO.File]::ReadAllText/WriteAllText`(BOM 강제 없이 UTF-8로 명시)로 전면 교체해 해결, 재검증으로 한글 주석 원형 보존 + 전체 스택 재부팅 성공(`.ps1` 기준 verifier 25초/oacx 154초, 둘 다 HTTP 200) 확인. 두 인코딩 버그 모두 메모리에 기록해 향후 신규 `.ps1` 작성 시 재발 방지
+- admin(v1 JDK8/v2 JDK21)은 이번 라운드에서 명시적으로 범위 제외
+
+**상태**: ✅ verifier+oacx+공유DB 통합 배포 파이프라인(`.sh`/`.ps1` 양쪽) 실전 데이터로 전체 검증 완료, JDK8/JDK21/Tomcat 베이스 이미지 레지스트리 등록 완료. 잔여: `comdc-provider.json`의 `serviceCode`(실제 값 필요), TODO/README류 정리, admin 트랙(보류).
+
+### 마무리 보강 — 포트 기본값, config 업데이트 여부 옵션, 로그 경로 통합
+
+- `comdc-provider.json`의 빈 `serviceCode`를 `coidentitydocument-provider.json`과 동일한 `raonsnc.5`로 직접 반영(자동화 대상 아님, 1회성 수정)
+- **포트 기본값 정리**: verifier 호스트 노출 포트를 내부 포트와 동일하게(`48085`, 기존 `18090`에서 변경), oacx도 동일하게(`8080`, 기존 `18091`에서 변경) — DB처럼 리매핑 없이 그대로 노출하는 방향으로 통일. `verifier/oacx/omnionecx`의 `.sh`/`.ps1` 전부 반영
+- **config 업데이트 여부 옵션 신규 구현**(`omnionecx/v1/deploy/deploy.sh`+`.ps1`): "DB 접속정보를 이번 배포값으로 업데이트할까요?" 프롬프트 추가(기본값 N = config 원본 값 그대로 사용). N을 선택하면 DB_CONTAINER/DB_NAME/APP_USER/APP_PASSWORD를 따로 입력받지 않고 verifier의 `application-datasource.properties`에서 직접 파싱해 그 값에 맞춰 DB 컨테이너를 생성(즉 config가 "진실의 원천"이 되고 DB가 거기에 맞춰짐 — 반대 방향이 아님). mybatis/log 경로, oper.mode, provider.json의 base/publicKey/curveType은 이 프로젝트의 마운트 컨벤션과 환경 선택에 필요한 구조적 값이라 업데이트 여부와 무관하게 항상 반영. `.sh`/`.ps1` 양쪽 실전 데이터로 재검증 완료(DB 컨테이너명이 config에 이미 박혀있던 `mariadb-verifier-test`로 자동 생성되는 것까지 확인)
+- 검증 중 `http://localhost:8080/`(바로 접속)이 열리지 않는다는 문의가 있어 확인 — oacx의 Context path가 기본값 `oacx`라 실제로는 `http://localhost:8080/oacx/`에서 서비스됨(정상 동작, root(`/`)는 Tomcat 기본 404). 필요하면 Context path를 빈 값(ROOT)으로 바꾸는 옵션 추가 가능
+- **로그 마운트 경로를 서비스별 폴더 밑에서 공용 `log/` 트리로 이전**: `<서비스>/logs` → `sandbox/log/<서비스>` 형태로 변경(예: `sandbox/verifier/logs` → `sandbox/log/verifier`, oacx는 `sandbox/log/oacx/{tomcat,app}`). `VERIFIER_ROOT`/`OACX_ROOT`의 부모 디렉터리를 기준으로 자동 계산(`dirname`/`Split-Path -Parent`). `verifier`, `oacx`, `omnionecx` 전부의 `.sh`/`.ps1`에 반영, `.sh` 기준 실전 재검증(새 경로에 실시간으로 로그가 쌓이는 것과 기존 경로엔 더 이상 안 쓰이는 것 둘 다 타임스탬프로 확인)
+- 이 작업 중 `verifier/v1/deploy/deploy.ps1`(개별 버전)에서 `omnionecx`용에는 이미 적용했던 PowerShell UTF-8 mojibake 수정이 누락돼 있던 걸 발견해 동일하게 적용(`Read-Utf8File`/`Write-Utf8File` 헬퍼 추가)
+- `.ps1` 동작 테스트는 사용자가 다른 PC에서 직접 진행 예정
+
+### 다른 PC 실전 테스트에서 발견한 문제 3건 + 프롬프트 간소화
+
+- 다른 PC에서 `.ps1` 직접 실행 시 Windows 기본 PowerShell 실행 정책(`Restricted`)에 막혀 `PSSecurityException` 발생 — 스크립트 문제 아님, `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` 또는 `-ExecutionPolicy Bypass -File`로 해결 안내
+- **프롬프트 대폭 간소화 요청 반영**(24개 → 21개):
+  - DDL/DML을 verifier/oacx 각각 물어보던 것(4개 프롬프트)을 통합 경로 1개씩(2개)으로 축소 — `INSERT INTO VF_ORGANIZATION`/`INSERT INTO OACX_PROVIDER` 문자열로 파일 내용을 보고 자동 판별하도록 스테이징 함수 재작성(같은 폴더에 섞여있어도 정상 동작)
+  - verifier의 "컨테이너 내부 포트"/"호스트 노출 포트" 2개 질문을 "포트" 1개로 통합(리매핑 없음 정책과 일치)
+  - **스크립트 위치 기준 자동 감지 추가**: `verifier/`, `oacx/`, `ddl/`, `dml/` 폴더가 스크립트와 같은 위치에 이미 있으면 경로를 아예 안 물어보고 자동 사용(사용자가 deploy.ps1을 sandbox 폴더 안에 직접 넣고 쓰는 실사용 패턴에 맞춤), 없을 때만 기존처럼 프롬프트
+  - `.sh`/`.ps1` 둘 다 실전 재검증 완료
+
+### docker compose 전환 (컨테이너명 db/verifier/oacx 고정 + 명시적 bridge 네트워크)
+
+- 사용자 요청: (1) compose로 묶어서 db/verifier/oacx라는 이름으로 컨테이너 관리, (2) 외부 통신을 위해 네트워크를 명시적으로 bridge로 지정
+- **하이브리드 구조로 설계**: 대화형 입력 수령 + config 패치 여부 분기 + DB에서 값 역추출 + provider.json 자동 설정 등 기존의 모든 명령형 로직은 그대로 유지하고, 마지막 실행 단계만 `docker run` 3회(+ 각각 별도 대기 루프) → `docker-compose.yml` 1개 생성 + `docker compose up -d` 1회 호출로 교체. `docker-compose.yml`은 `omnionecx/v1/deploy/`에 신규 작성(git 추적), `depends_on: condition: service_healthy`로 db→verifier→oacx 기동 순서를 compose가 직접 강제
+- **verifier/oacx에 실제 HEALTHCHECK 신규 추가**: 기존엔 로그 문자열 grep으로만 부팅 확인했는데, compose의 `service_healthy` 게이팅을 쓰려면 진짜 헬스체크가 필요해서 `curl -f http://localhost:포트/`로 추가(사전에 `jdk8`/`tomcat9-jdk8` 이미지 둘 다 curl이 이미 설치돼 있음을 확인). DB는 기존 `healthcheck.sh` 그대로 compose YAML 문법으로 이관
+- **컨테이너명**: `container_name: db/verifier/oacx`로 고정하되, DB는 "config 그대로 유지" 모드에서는 기존 config의 host값을 그대로 써야 접속이 되므로 그 모드일 땐 여전히 config에서 역추출한 이름을 사용 — "config 업데이트=예"를 고를 때만 기본값이 "db"로 제안됨(무조건 강제하면 "config 그대로 유지" 기능이 깨짐)
+- **네트워크**: `networks: omnionecx: driver: bridge` 명시(이미 실측 확인된 기본 동작과 동일하지만, 사용자 요청대로 명시적으로 선언)
+- **비밀번호 파일 미저장 원칙 유지**: compose의 변수치환은 `.env` 파일 또는 프로세스 환경변수 양쪽에서 값을 가져올 수 있는데, 비밀번호(`DB_ROOT_PASSWORD`/`APP_PASSWORD`)만 `.env`에 쓰지 않고 `docker compose up` 호출 직전에만 셸/프로세스 환경변수로 잠깐 설정했다가 호출 직후 즉시 제거(`export -n`/`Remove-Item Env:\`)하는 방식으로 "어떤 파일에도 저장하지 않는다"는 기존 원칙을 그대로 지킴. 나머지(경로/포트/이미지명/DB명/계정명 등 비민감 값)만 `.env` 파일에 기록
+- **실제 발견한 버그**: `docker compose --env-file <경로>`에 넘긴 경로가 `D:\d\99_project\...`처럼 깨지는 현상 발견 — 원인은 스크립트 최상단의 `export MSYS_NO_PATHCONV=1`(예전 `docker run -v SRC:DEST:MODE` 콜론 문자열 보호용으로 필요했던 설정)이 이제 `docker run`을 전혀 안 쓰는 상황에서도 그대로 남아있어, `--env-file`처럼 MSYS의 정상적인 POSIX→Windows 경로 변환이 필요한 단일 경로 인자까지 변환을 막아버린 것 — Windows 실행 파일이 변환 안 된 POSIX 경로(`/d/99_project/...`)를 "현재 드라이브 기준 상대경로"로 오해석해 발생. `MSYS_NO_PATHCONV` 설정 자체를 제거해서 해결(더 이상 콜론 마운트 문자열을 셸 인자로 넘기지 않으므로 원래 목적 자체가 불필요해짐)
+- `.sh`/`.ps1` 양쪽 모두 "config 업데이트 안 함"/"config 업데이트 함" 두 경로 전부 실전 데이터로 재검증: DB/verifier/oacx 3개 컨테이너 전부 Docker 자체 헬스체크로 `(healthy)` 상태 확인(`docker ps`), HTTP 200 확인, `.env` 파일에 비밀번호가 없음을 직접 확인
+
+**상태**: ✅ compose 전환 완료 및 `.sh`/`.ps1` 양쪽 실전 검증 완료(config 업데이트 Y/N 두 경로 모두). 컨테이너명 고정(db 기본값/verifier/oacx), 네트워크 명시적 bridge, HEALTHCHECK 기반 순서 보장까지 반영.

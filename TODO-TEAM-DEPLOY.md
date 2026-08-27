@@ -80,15 +80,20 @@
 - [ ] **Informix** — `ibmcom/informix-developer-database` 공식 이미지로 Docker 실행 가능 확인. `LICENSE=accept` 필요. Developer Edition, 비운영 전용
 - 셋 다 "Docker로 올릴 수 있는가?"에 대한 답은 **Yes** — 계정/구매 없이 공식 이미지 pull 자체는 가능. 다만 셋 다 최초 실행 시 EULA 동의 플래그를 넘겨야 하고, Db2/Informix는 이미지 자체가 비운영 전용으로 못박혀 있어 이 프로젝트의 "테스트/데모 전용" 취지와는 잘 맞음
 
-## 신규 트랙: JDK/Tomcat 애플리케이션 서버 이미지 (2026-08-25 요청, 상세는 다음 세션에서 확정)
+## 신규 트랙: JDK/Tomcat 애플리케이션 서버 이미지 (2026-08-25 요청 → 2026-08-27 구축 완료)
 
-- [ ] **JDK 18** 이미지 구축 (DB가 아닌 애플리케이션 런타임 — 별도 트랙)
-- [ ] **JDK 21** 이미지 구축
-- [ ] **Tomcat** 이미지 구축
-- 공통 설정 항목(확정, 세부 값/기본값은 미정): `app_path`, `config_path`, `log_path`, `port_nbr`
-  - `app_path`/`config_path`/`log_path` 3개는 전부 **볼륨 마운트 경로** (호스트 ↔ 컨테이너 바인드마운트 대상)
-  - `port_nbr`은 리스너 포트
-- 디테일(정확한 마운트 대상 디렉터리, 이미지 베이스 선택, 배포 스크립트 패턴을 DB 3단계 구조와 동일하게 갈지 여부 등)는 다음 세션에서 논의 예정 — 오늘은 항목만 기록
+- [x] ~~**JDK 8** 이미지 구축~~ (2026-08-27 완료 — `jdk8/base`, `servicetech2/jdk8:latest`로 레지스트리 등록. `APP_JAR_GLOB` 환경변수로 앱마다 다른 JAR 이름 패턴 지정 가능하게 일반화. 최초 항목엔 "JDK 18"로 적혀있었으나 실제 요구사항(OmnioneCX v1 verifier)은 JDK 8이라 그걸로 진행)
+- [x] ~~**JDK 21** 이미지 구축~~ (2026-08-27 완료 — `jdk21/base`, `servicetech2/jdk21:latest`. v2 대비, jdk8/base와 동일 구조)
+- [x] ~~**Tomcat** 이미지 구축~~ (2026-08-27 완료 — `tomcat/base`, `servicetech2/tomcat9-jdk8:9-jdk8`. 공식 이미지 재태깅만, ENTRYPOINT 커스터마이징 없음)
+- 공통 설정 항목 확정: `app_path`, `config_path`, `log_path`(전부 바인드마운트), `port_nbr`. verifier/oacx 실제 배포로 검증 완료 — 상세는 WORKLOG.md 2026-08-27 절 참고
+- [x] ~~verifier(JDK8) 실전 배포 검증~~ (실제 프로덕션 JAR `mdl-verifier-1.3.42.jar` + 실제 DDL/DML/설정으로 완전 검증, 상세는 WORKLOG.md 참고)
+- [x] ~~oacx(Tomcat) 실전 배포 검증~~ (실제 WAR + provider.json 6종 자동 설정 포함 완전 검증)
+- [x] ~~verifier+oacx+공유DB 통합 배포 스크립트(`omnionecx/v1/deploy/deploy.sh`+`.ps1`)~~ (2026-08-27 완료, 실전 데이터로 전체 스택 종단간 검증)
+- [ ] `comdc-provider.json`의 `serviceCode`가 빈 값 — 인증사업자별 고유값이라 자동화 대상 아님, 실제 값 확인 필요
+- [ ] `oacx/v1/deploy/deploy.ps1` 개별 버전 (지금은 `.sh`만 있음, `omnionecx/v1/deploy/`의 통합 스크립트가 `.sh`+`.ps1` 둘 다 있어 우선순위 낮음)
+- [ ] admin(v1 JDK8 / v2 JDK21) — 명시적으로 범위 제외, 착수 전
+- [ ] (신규) 기본 포트 확정 — DB는 각 DBMS 기본 포트 유지, verifier `48085`, oacx `8080`, admin `6443`, sample `9025` (2026-08-27 사용자 정리, 스크립트 기본값 반영 예정)
+- [ ] (신규) verifier/oacx 배포 스크립트에 "config 설정값 업데이트 여부" 옵션 추가 예정 — 기본값은 **수정 금지**(마운트할 `config/` 내용을 그대로 사용). 수정 금지를 선택한 경우, DB 구성에 필요한 최소 입력(partner code, oper_sort 등)만 받고 나머지 앱 설정 항목 입력/패치는 전부 건너뛰도록 흐름 변경 필요 (아직 미구현)
 
 ## 참고: 2026-08-26 정밀 버전 태그 추가
 
