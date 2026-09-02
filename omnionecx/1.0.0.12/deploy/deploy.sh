@@ -7,7 +7,8 @@
 #            db/verifier/oacx 각각의 build-and-push.sh 로 1.0.0.12 이미지가
 #            레지스트리에 이미 등록되어 있어야 함.
 #
-# omnionecx/default 트랙과의 차이 (모두 이 폴더의 세 Dockerfile에 빌트인됨):
+# omnionecx/default 트랙과의 차이 (모두 상위 폴더(../db, ../verifier, ../oacx)의
+# 세 Dockerfile에 빌트인됨):
 #   - verifier/oacx: app(JAR/WAR)이 이미지 안에 있음 -- app 스테이징 없음
 #   - DB: DDL/DML이 이미지 안에 있음 -- DDL_DIR/DML_DIR 수령 없음
 #   - PARTNER_CODE는 'raon'으로 고정 -- 더 이상 물어보지 않음
@@ -26,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 NAMESPACE="servicetech2"
-VERSION="$(basename "$SCRIPT_DIR")"   # 이 폴더명(예: 1.0.0.12) 자체가 버전
+VERSION="$(basename "$(dirname "$SCRIPT_DIR")")"   # deploy/의 부모 폴더명(예: 1.0.0.12)이 버전
 PARTNER_CODE="raon"                   # DB(VF_ORGANIZATION)/provider.json 공통 -- 더 이상 선택 불가
 
 c_reset='\033[0m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_cyan='\033[36m'
