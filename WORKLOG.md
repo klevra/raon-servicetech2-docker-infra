@@ -478,3 +478,27 @@
 **테스트**: 실제 sandbox 데이터(`D:\03. Docker\sandbox`)로 `deploy.sh`를 config 업데이트=N 경로로 end-to-end 실행. `application-datasource.properties`는 그대로 유지, `server.properties`는 mybatis/log 경로·oper.mode만 원본에 직접 반영, provider.json 6종도 원본에 직접 반영됨을 확인. `.staging/`에 더 이상 verifier/oacx config 하위 디렉터리가 생기지 않음을 확인. (DB 컨테이너가 DML 파일의 스키마명 하드코딩 오류로 기동 실패했으나, 이는 sandbox의 기존 DML 데이터 문제이며 이번 변경과 무관 — 별도 확인 필요 항목으로 남김.) 테스트 후 sandbox의 config는 원래 상태로 복원, 컨테이너/네트워크/.staging 모두 정리 완료.
 
 **상태**: ✅ config 직접 마운트 전환 완료 (`.sh`/`.ps1` 양쪽 소스 수정, `.sh`는 실전 sandbox 데이터로 검증 완료. `.ps1`은 구문 검사만 완료, 실기동 테스트는 미실시).
+
+### OmnioneCX v1 신규 트랙: JDK8/JDK21/Tomcat 베이스 이미지 + verifier/oacx/통합(omnionecx) 배포 스크립트, docker compose 전환
+
+`omnionecx/v1/deploy/`를 `omnionecx/default/deploy/`로 이름 변경(git mv, 이력 보존)하고, 그 옆에 **버전 고정 이미지 트랙**(`omnionecx/1.0.0.12/`)을 신설했다.
+
+**핵심 아이디어**: `default` 트랙은 매 배포마다 app(JAR/WAR)과 DDL/DML을 외부 폴더에서 스테이징/패치했지만, `1.0.0.12` 트랙은 그것들을 전부 이미지 빌드 시점에 구워 넣는다. 그래서 배포 시점에 필요한 파일이 `Dockerfile`(빌드용) + `docker-compose.yml`(실행용) + `deploy.sh`/`.ps1`(값 수령용) 정도로 최소화된다.
+
+**세부 내역**:
+1. **PARTNER_CODE를 'raon'으로 통일**하고, 관련 DDL/DML을 `omnionecx/1.0.0.12/db/Dockerfile`이 굽는 DB 이미지 안에 빌트인. `VF_ORGANIZATION.PARTNER_CODE`가 build 시점에 이미 'raon'으로 치환되어 있음.
+2. **운영/개발(OPER_SORT) 선택은 유지** — `OACX_PROVIDER`의 dev/prod 리터럴을 `__OPER_SORT__` 플레이스홀더로 바꿔두고, DB 이미지의 `00-patch-oper-sort.sh`(initdb.d 안에서 다른 .sql보다 먼저 실행되도록 `00-` 접두사)가 컨테이너 환경변수 `OPER_SORT`로 컨테이너 최초 기동 시 1회 치환. (mysql 계정으로 실행되는 init 단계가 같은 디렉터리에 sed 임시파일을 못 만드는 권한 문제가 있어 `chmod -R a+rwX /docker-entrypoint-initdb.d`로 해결.)
+3. **deploy 파일 최소화** — verifier/oacx 이미지에도 app이 빌트인되어 있어(`COPY app/ /app/`, oacx는 web.xml의 config 경로 절대경로 패치도 빌드 시점에 1회 처리) 배포 스크립트에서 app 스테이징/DDL_DIR/DML_DIR 수령이 전부 사라짐.
+4. **DB 데이터 영속화** — `DB_DATA_DIR` 환경변수로 `/var/lib/mysql`을 호스트 경로에 바인드마운트(default는 휘발성이었음). 단, 데이터가 이미 있는 채로 재기동하면 MariaDB 공식 이미지 특성상 initdb.d(DDL/DML 시딩)는 다시 실행되지 않음 — 최초 기동 시 1회만 적용됨을 문서화.
+5. **컨테이너 진입용 명령어** — `exec.sh`/`exec.ps1` 신설. `docker compose -p omnionecx exec <db|verifier|oacx> [명령]`을 감싼 얇은 래퍼.
+
+**Dockerfile 설계** (`omnionecx/1.0.0.12/{db,verifier,oacx}/Dockerfile` + 각각의 `build-and-push.sh`):
+- verifier: `servicetech2/jdk8` 베이스 + `COPY app/ /app/`, `LOADER_PATH=/app/jdbc`로 재설정(별도 jdbc 볼륨 불필요)
+- oacx: `servicetech2/tomcat9-jdk8` 베이스 + `COPY app/ /app/` + web.xml의 `./WEB-INF/config/server.properties` → `/config/server.properties` 절대경로 패치(빌드 시 1회)
+- db: `servicetech2/mariadb` 베이스 + DDL/DML(raon 고정, OPER_SORT 플레이스홀더) COPY
+
+**config/log는 여전히 외부 마운트** — verifier/oacx의 config(DB 접속정보, provider.json 등 환경별 값)는 `default`와 동일하게 sandbox 원본에 직접 패치 후 그대로 마운트하는 방식을 유지(2주 전 작업한 "config 직접 마운트" 설계 그대로 재사용). app만 이미지에 고정되고 config는 여전히 배포 시점 값.
+
+**테스트**: 실제 sandbox 데이터로 3개 이미지(db/verifier/oacx:1.0.0.12)를 빌드+레지스트리 push 후, `deploy.sh`와 `deploy.ps1` 양쪽 모두 실제 실행 — DB_DATA_DIR 영속 볼륨 + OPER_SORT(dev/prod 둘 다) + config 유지(N) 모드로 db→verifier→oacx 전부 healthy, HTTP 200/200, PARTNER_CODE=raon/OPER_SORT 반영 정확히 확인. `exec.sh`/`exec.ps1`의 기반 메커니즘(`docker compose exec`)도 별도 확인. 테스트에 사용한 로컬 복사본은 전부 정리하고 원본 sandbox 데이터 무결성 재확인 완료.
+
+**상태**: ✅ 1.0.0.12 트랙(Dockerfile 3종 + build-and-push.sh 3종 + docker-compose.yml + deploy.sh/.ps1 + exec.sh/.ps1) 전부 실전 데이터로 end-to-end 검증 완료. 이미지 3종 레지스트리 등록 완료.

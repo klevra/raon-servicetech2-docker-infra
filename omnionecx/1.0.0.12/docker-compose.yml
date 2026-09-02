@@ -1,0 +1,94 @@
+# ============================================================================
+# OmnioneCX 1.0.0.12 통합 배포 — docker compose 템플릿 (버전 고정 이미지 트랙)
+#
+# omnionecx/default 트랙과의 핵심 차이:
+#   - verifier/oacx 이미지 자체에 app(JAR/WAR)이 이미 빌트인되어 있다 --
+#     app 관련 볼륨이 전혀 없고 config/log 경로만 마운트한다.
+#   - DB도 마찬가지로 DDL/DML + PARTNER_CODE(raon 고정)가 이미지에 빌트인
+#     되어 있다 -- 별도 DDL_DIR/DML_DIR 마운트가 필요 없다. OPER_SORT(운영/
+#     개발)만 컨테이너 환경변수로 배포 시점에 선택 가능하다.
+#   - DB 데이터는 DB_DATA_DIR로 지정한 호스트 경로에 영속화된다(default
+#     트랙은 휘발성이었음) -- 그 경로를 열어보면 실제 DB 파일에 바로 접근
+#     가능하고, 컨테이너를 내렸다 올려도 데이터가 유지된다. 단, 이미 데이터가
+#     있는 상태로 재기동하면 MariaDB 공식 엔트리포인트 특성상 initdb.d(DDL/
+#     DML 시딩)는 다시 실행되지 않는다 -- 최초 기동 때 1회만 적용됨.
+#
+# 이 파일도 직접 실행하지 않는다. (별도로 작성할) 1.0.0.12 전용
+# deploy.sh/.ps1이 대화형으로 값을 수령해 .env를 생성한 뒤
+# `docker compose --env-file <생성된 .env> up -d`로 이 템플릿을 구동한다.
+# 컨테이너명/네트워크/healthcheck 등은 default 트랙과 동일한 관례를 따른다.
+# ============================================================================
+services:
+  db:
+    image: ${DB_IMAGE}
+    container_name: ${DB_CONTAINER}
+    networks: [omnionecx]
+    ports:
+      - "${DB_PORT}:3306"
+    volumes:
+      - ${DB_DATA_DIR}:/var/lib/mysql
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${APP_USER}
+      MARIADB_PASSWORD: ${APP_PASSWORD}
+      OPER_SORT: ${OPER_SORT}
+      TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized || exit 1"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  verifier:
+    image: ${VERIFIER_IMAGE}
+    container_name: ${VF_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${VF_PORT}:${VF_PORT}"
+    volumes:
+      - ${VF_CONFIG_DIR}:/config
+      - ${VERIFIER_CONFIG_ROOT}/template:/config/template:ro
+      - ${VERIFIER_CONFIG_ROOT}/license:/config/license:ro
+      - ${VERIFIER_CONFIG_ROOT}/sp:/config/sp:ro
+      - ${VERIFIER_CONFIG_ROOT}/fonts:/config/fonts:ro
+      - ${VF_LOG_ROOT}:/logs
+    environment:
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/
+      LOGGING_FILE_PATH: /logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${VF_PORT}/"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+
+  oacx:
+    image: ${OACX_IMAGE}
+    container_name: ${OACX_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      verifier:
+        condition: service_healthy
+    ports:
+      - "${OACX_HOST_PORT}:8080"
+    volumes:
+      - ${OACX_CONFIG_DIR}:/config:ro
+      - ${CONTEXT_XML}:/usr/local/tomcat/conf/Catalina/localhost/${CONTEXT_PATH}.xml:ro
+      - ${OX_LOG_ROOT}/tomcat:/usr/local/tomcat/logs
+      - ${OX_LOG_ROOT}/app:/logs/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/${CONTEXT_PATH}/"]
+      interval: 5s
+      timeout: 5s
+      start_period: 90s
+      retries: 24
+
+networks:
+  omnionecx:
+    name: ${NETWORK_NAME}
+    driver: bridge
