@@ -12,7 +12,8 @@
   세 Dockerfile에 빌트인됨):
     - verifier/oacx: app(JAR/WAR)이 이미지 안에 있음 -- app 스테이징 없음
     - DB: DDL/DML이 이미지 안에 있음 -- DDL_DIR/DML_DIR 수령 없음
-    - PARTNER_CODE는 'raon'으로 고정 -- 더 이상 물어보지 않음
+    - PARTNER_CODE는 배포 시점에 물어봄(기본값 'raon') -- OPER_SORT와 같은
+      방식(플레이스홀더 + 컨테이너 최초 기동 시 치환)으로 DB 이미지에 반영됨
     - DB 데이터는 DbDataDir에 영속화됨 (default는 휘발성이었음)
 
   그래서 이 스크립트가 하는 일은 3가지뿐이다:
@@ -28,7 +29,6 @@ Set-Location $ScriptDir
 
 $Namespace = "servicetech2"
 $Version = Split-Path -Leaf (Split-Path -Parent $ScriptDir)   # deploy\의 부모 폴더명(예: 1.0.0.12)이 버전
-$PartnerCode = "raon"                    # DB(VF_ORGANIZATION)/provider.json 공통 -- 더 이상 선택 불가
 
 function Write-Info($msg)  { Write-Host "[정보] $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)    { Write-Host "[완료] $msg" -ForegroundColor Green }
@@ -120,6 +120,9 @@ catch { Write-Err2 "로컬 레지스트리($LocalRegistry)가 응답하지 않�
 
 Write-Host ""
 $NetworkName = Ask "공용 네트워크 이름" "omnionecx-net"
+
+Write-Host ""
+$PartnerCode = Ask "VF_ORGANIZATION.PARTNER_CODE / provider.json partnerCode 공통값" "raon"
 
 Write-Host ""
 Write-Host "-------- config 설정값 업데이트 여부 --------"
@@ -216,7 +219,7 @@ Write-Host " 네트워크      : $NetworkName"
 Write-Host " DB            : $DbImage / $DbContainer / db=$DbName / port=$DbPort"
 Write-Host " DB 데이터 경로 : $DbDataDir"
 Write-Host " 공용 앱 계정  : $AppUser"
-Write-Host " PARTNER_CODE  : $PartnerCode (고정)"
+Write-Host " PARTNER_CODE  : $PartnerCode"
 Write-Host " verifier      : $VerifierImage / $VfContainer (포트 $VfPort), root=$VerifierRoot"
 Write-Host " oacx          : $OacxImage / $OacxContainer (포트 $OacxHostPort, /$ContextPath), root=$OacxRoot"
 if ($GeneratedPw) { Write-Host " 생성된 root 비밀번호 : $DbRootPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
@@ -327,7 +330,7 @@ foreach ($pf in $ProviderFiles) {
     $pc = $pc -replace '/api/v2/transaction/web2appsspay', '/api/v2/transaction/web2app'
     Write-Utf8File $target $pc
 }
-Write-Ok "provider.json 6종에 base/publicKey/vc.curveType을 반영했습니다 (partnerCode=$PartnerCode 고정)."
+Write-Ok "provider.json 6종에 base/partnerCode/publicKey/vc.curveType을 반영했습니다 (partnerCode=$PartnerCode)."
 Write-Warn2 "serviceCode는 인증사업자별 고유값이라 자동화 대상에서 제외했습니다 -- 비어있는 파일은 직접 채워야 합니다."
 
 $ContextXml = Join-Path $ScriptDir ".staging\$OacxContainer\$ContextPath.xml"
@@ -363,6 +366,7 @@ DB_NAME=$DbName
 DB_PORT=$DbPort
 DB_DATA_DIR=$DbDataDir
 APP_USER=$AppUser
+PARTNER_CODE=$PartnerCode
 OPER_SORT=$OperSort
 VERIFIER_IMAGE=$VerifierImage
 VF_CONTAINER=$VfContainer

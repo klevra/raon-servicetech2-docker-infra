@@ -4,9 +4,10 @@
 # omnionecx/default 트랙과의 핵심 차이:
 #   - verifier/oacx 이미지 자체에 app(JAR/WAR)이 이미 빌트인되어 있다 --
 #     app 관련 볼륨이 전혀 없고 config/log 경로만 마운트한다.
-#   - DB도 마찬가지로 DDL/DML + PARTNER_CODE(raon 고정)가 이미지에 빌트인
-#     되어 있다 -- 별도 DDL_DIR/DML_DIR 마운트가 필요 없다. OPER_SORT(운영/
-#     개발)만 컨테이너 환경변수로 배포 시점에 선택 가능하다.
+#   - DB도 마찬가지로 DDL/DML이 이미지에 빌트인되어 있다 -- 별도 DDL_DIR/
+#     DML_DIR 마운트가 필요 없다. 다만 PARTNER_CODE(기본값 raon)/OPER_SORT
+#     (운영/개발, 기본값 dev)는 컨테이너 환경변수로 배포 시점에 값을
+#     바꿀 수 있다.
 #   - DB 데이터는 DB_DATA_DIR로 지정한 호스트 경로에 영속화된다(default
 #     트랙은 휘발성이었음) -- 그 경로를 열어보면 실제 DB 파일에 바로 접근
 #     가능하고, 컨테이너를 내렸다 올려도 데이터가 유지된다. 단, 이미 데이터가
@@ -32,6 +33,7 @@ services:
       MARIADB_DATABASE: ${DB_NAME}
       MARIADB_USER: ${APP_USER}
       MARIADB_PASSWORD: ${APP_PASSWORD}
+      PARTNER_CODE: ${PARTNER_CODE}
       OPER_SORT: ${OPER_SORT}
       TZ: Asia/Seoul
     healthcheck:

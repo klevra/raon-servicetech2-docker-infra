@@ -11,7 +11,8 @@
 # 세 Dockerfile에 빌트인됨):
 #   - verifier/oacx: app(JAR/WAR)이 이미지 안에 있음 -- app 스테이징 없음
 #   - DB: DDL/DML이 이미지 안에 있음 -- DDL_DIR/DML_DIR 수령 없음
-#   - PARTNER_CODE는 'raon'으로 고정 -- 더 이상 물어보지 않음
+#   - PARTNER_CODE는 배포 시점에 물어봄(기본값 'raon') -- OPER_SORT와 같은
+#     방식(플레이스홀더 + 컨테이너 최초 기동 시 치환)으로 DB 이미지에 반영됨
 #   - DB 데이터는 DB_DATA_DIR에 영속화됨 (default는 휘발성이었음)
 #
 # 그래서 이 스크립트가 하는 일은 3가지뿐이다:
@@ -28,7 +29,6 @@ cd "$SCRIPT_DIR"
 
 NAMESPACE="servicetech2"
 VERSION="$(basename "$(dirname "$SCRIPT_DIR")")"   # deploy/의 부모 폴더명(예: 1.0.0.12)이 버전
-PARTNER_CODE="raon"                   # DB(VF_ORGANIZATION)/provider.json 공통 -- 더 이상 선택 불가
 
 c_reset='\033[0m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_cyan='\033[36m'
 info()  { printf "${c_cyan}[정보]${c_reset} %s\n" "$1"; }
@@ -112,6 +112,10 @@ fi
 echo
 ask "공용 네트워크 이름" "omnionecx-net"
 NETWORK_NAME="$REPLY"
+
+echo
+ask "VF_ORGANIZATION.PARTNER_CODE / provider.json partnerCode 공통값" "raon"
+PARTNER_CODE="$REPLY"
 
 echo
 echo "-------- config 설정값 업데이트 여부 --------"
@@ -219,7 +223,7 @@ echo " 네트워크      : $NETWORK_NAME"
 echo " DB            : $DB_IMAGE / $DB_CONTAINER / db=$DB_NAME / port=$DB_PORT"
 echo " DB 데이터 경로 : $DB_DATA_DIR"
 echo " 공용 앱 계정  : $APP_USER"
-echo " PARTNER_CODE  : $PARTNER_CODE (고정)"
+echo " PARTNER_CODE  : $PARTNER_CODE"
 echo " verifier      : $VERIFIER_IMAGE / $VF_CONTAINER (포트 ${VF_PORT}), root=$VERIFIER_ROOT"
 echo " oacx          : $OACX_IMAGE / $OACX_CONTAINER (포트 ${OACX_HOST_PORT}, /$CONTEXT_PATH), root=$OACX_ROOT"
 [[ "$GENERATED_PW" -eq 1 ]] && echo " 생성된 root 비밀번호 : $DB_ROOT_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
@@ -324,7 +328,7 @@ for pf in "${PROVIDER_FILES[@]}"; do
   [[ -n "$DID_CURVE_TYPE" ]] && sed -i -E "s#\"vc\.curveType\":\s*\"[^\"]*\"#\"vc.curveType\":\"${DID_CURVE_TYPE}\"#" "$target"
   sed -i -E 's#/api/v2/transaction/web2appsspay#/api/v2/transaction/web2app#' "$target"
 done
-ok "provider.json 6종에 base/publicKey/vc.curveType을 반영했습니다 (partnerCode=${PARTNER_CODE} 고정)."
+ok "provider.json 6종에 base/partnerCode/publicKey/vc.curveType을 반영했습니다 (partnerCode=${PARTNER_CODE})."
 warn "serviceCode는 인증사업자별 고유값이라 자동화 대상에서 제외했습니다 -- 비어있는 파일은 직접 채워야 합니다."
 
 CONTEXT_XML="${SCRIPT_DIR}/.staging/${OACX_CONTAINER}/${CONTEXT_PATH}.xml"
@@ -361,6 +365,7 @@ DB_NAME=${DB_NAME}
 DB_PORT=${DB_PORT}
 DB_DATA_DIR=${DB_DATA_DIR}
 APP_USER=${APP_USER}
+PARTNER_CODE=${PARTNER_CODE}
 OPER_SORT=${OPER_SORT}
 VERIFIER_IMAGE=${VERIFIER_IMAGE}
 VF_CONTAINER=${VF_CONTAINER}

@@ -502,3 +502,14 @@
 **테스트**: 실제 sandbox 데이터로 3개 이미지(db/verifier/oacx:1.0.0.12)를 빌드+레지스트리 push 후, `deploy.sh`와 `deploy.ps1` 양쪽 모두 실제 실행 — DB_DATA_DIR 영속 볼륨 + OPER_SORT(dev/prod 둘 다) + config 유지(N) 모드로 db→verifier→oacx 전부 healthy, HTTP 200/200, PARTNER_CODE=raon/OPER_SORT 반영 정확히 확인. `exec.sh`/`exec.ps1`의 기반 메커니즘(`docker compose exec`)도 별도 확인. 테스트에 사용한 로컬 복사본은 전부 정리하고 원본 sandbox 데이터 무결성 재확인 완료.
 
 **상태**: ✅ 1.0.0.12 트랙(Dockerfile 3종 + build-and-push.sh 3종 + docker-compose.yml + deploy.sh/.ps1 + exec.sh/.ps1) 전부 실전 데이터로 end-to-end 검증 완료. 이미지 3종 레지스트리 등록 완료.
+
+### omnionecx/1.0.0.12: 배포 폴더 구조 확정 + PARTNER_CODE도 배포 시점 값으로 일반화
+
+- `omnionecx/1.0.0.12/deploy/`에 verifier/oacx config, log 폴더 스켈레톤(.gitkeep)을 추가 -- `sandbox/`와 동일한 패턴으로, 실제 내용물(민감정보)은 `.gitignore`(`/omnionecx/*/deploy/{verifier,oacx,log,data}/**`)로 계속 제외.
+- **PARTNER_CODE 재검토**: 이전엔 'raon'으로 완전 고정했었는데, 배포마다 다른 거래처 코드를 써야 하는 경우가 있어 OPER_SORT와 같은 방식으로 되돌림 -- DML에 `__PARTNER_CODE__` 플레이스홀더를 심고, `00-patch-oper-sort.sh`를 `00-patch-placeholders.sh`로 일반화해서 `PARTNER_CODE`/`OPER_SORT` 둘 다 컨테이너 환경변수로 최초 기동 시 치환(기본값 각각 raon/dev). deploy.sh/.ps1에 PARTNER_CODE 프롬프트를 다시 추가.
+- DDL은 여전히 100% 이미지 고정(외부 개입 없음), DML도 대부분 고정이지만 "배포마다 바뀔 수 있는 특정 필드만" 플레이스홀더로 열어두는 패턴을 확립 -- 앞으로 유사한 값이 더 필요해지면 SQL에 플레이스홀더 추가 + `00-patch-placeholders.sh`에 한 줄 추가로 확장 가능.
+- 검토했던 대안(별도 dml/ 폴더를 마운트해서 컨테이너 기동 후 인증된 클라이언트로 추가 SQL 실행)은 root 비밀번호 인증을 스크립트가 직접 다뤄야 해서 기각 -- 플레이스홀더 치환 방식이 인증 이슈 없이 더 안전.
+
+**테스트**: db 이미지를 재빌드/재푸시 후 (1) 기본값(raon/dev), (2) PARTNER_CODE=hanabank + OPER_SORT=prod 커스텀 조합을 각각 standalone 컨테이너로 검증. 이어서 실제 sandbox 데이터로 `deploy.sh` 전체를 PARTNER_CODE=hanabank 입력으로 재실행 -- DB와 provider.json 양쪽에 hanabank가 동일하게 반영되고 db/verifier/oacx 전부 healthy, HTTP 200/200 확인. 테스트 아티팩트 전부 정리, 원본 sandbox 무결성 재확인.
+
+**상태**: ✅ deploy/ 폴더 스켈레톤 + PARTNER_CODE 일반화 전부 실전 검증 완료.

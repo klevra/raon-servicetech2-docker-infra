@@ -36,6 +36,21 @@ omnionecx/*/oacx/app/
 !/sandbox/**/
 !/sandbox/**/.gitkeep
 
+# omnionecx/1.0.0.12/deploy/ 안의 verifier·oacx config 원본, log, DB 데이터 경로도
+# 마찬가지 -- 폴더 구조(.gitkeep)만 추적하고 실제 내용물(민감정보/대용량 데이터)은 제외.
+/omnionecx/*/deploy/verifier/**
+!/omnionecx/*/deploy/verifier/**/
+!/omnionecx/*/deploy/verifier/**/.gitkeep
+/omnionecx/*/deploy/oacx/**
+!/omnionecx/*/deploy/oacx/**/
+!/omnionecx/*/deploy/oacx/**/.gitkeep
+/omnionecx/*/deploy/log/**
+!/omnionecx/*/deploy/log/**/
+!/omnionecx/*/deploy/log/**/.gitkeep
+/omnionecx/*/deploy/data/**
+!/omnionecx/*/deploy/data/**/
+!/omnionecx/*/deploy/data/**/.gitkeep
+
 # OS/에디터 잡동사니
 .DS_Store
 Thumbs.db
