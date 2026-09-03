@@ -166,7 +166,7 @@ DB_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-db-wooriib:${DB_VERSION_TAG}"
 
 DS_SRC="${VERIFIER_ROOT}/config/config/application-datasource.properties"
 if [[ "$UPDATE_DB_CONFIG" -eq 1 ]]; then
-  ask "DB 컨테이너 이름" "db"
+  ask "DB 컨테이너 이름" "mariadb-1.0.0.9"
   DB_CONTAINER="$REPLY"
   ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "VC_VERIFIER"
   DB_NAME="$REPLY"
@@ -212,7 +212,7 @@ fi
 echo
 echo "-------- verifier --------"
 info "verifier 설정 루트: $VERIFIER_ROOT (앞에서 이미 입력받음)"
-ask "verifier 컨테이너 이름" "verifier"
+ask "verifier 컨테이너 이름" "verifier-1.3.25-fix"
 VF_CONTAINER="$REPLY"
 ask "verifier 포트" "48085"
 VF_PORT="$REPLY"
@@ -228,7 +228,7 @@ else
   ask "OACX 설정 루트 경로 (config/ 가 있는 위치)" "D:\\03. Docker\\sandbox\\oacx"
   OACX_ROOT="$REPLY"
 fi
-ask "OACX 컨테이너 이름" "oacx"
+ask "OACX 컨테이너 이름" "oacx-1.0.0.9"
 OACX_CONTAINER="$REPLY"
 ask "OACX Context path (URL: http://localhost:<포트>/<이 값>/)" "oacx"
 CONTEXT_PATH="$REPLY"
@@ -420,10 +420,10 @@ ENVEOF
 export DB_ROOT_PASSWORD APP_PASSWORD
 info "docker compose up -d 를 실행합니다 (db → verifier → oacx 순서로 기동, 시간이 걸릴 수 있습니다)..."
 COMPOSE_STATUS=0
-docker compose -f "${SCRIPT_DIR}/docker-compose.yml" -p omnionecx --env-file "$ENV_FILE" up -d || COMPOSE_STATUS=$?
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" -p omnionecx-wooriib --env-file "$ENV_FILE" up -d || COMPOSE_STATUS=$?
 export -n DB_ROOT_PASSWORD APP_PASSWORD
 if [[ "$COMPOSE_STATUS" -ne 0 ]]; then
-  err "docker compose up 실패 (종료 코드 ${COMPOSE_STATUS}). 'docker compose -f docker-compose.yml -p omnionecx --env-file ${ENV_FILE} logs'로 확인하세요."
+  err "docker compose up 실패 (종료 코드 ${COMPOSE_STATUS}). 'docker compose -f docker-compose.yml -p omnionecx-wooriib --env-file ${ENV_FILE} logs'로 확인하세요."
   exit 1
 fi
 

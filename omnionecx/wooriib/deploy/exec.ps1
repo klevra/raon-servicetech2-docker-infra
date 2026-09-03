@@ -30,9 +30,9 @@ if (-not $Command -or $Command.Count -eq 0) {
 
 $EnvFile = Join-Path $ScriptDir ".staging\omnionecx.env"
 if (Test-Path $EnvFile) {
-    docker compose -f docker-compose.yml -p omnionecx --env-file $EnvFile exec $Service @Command
+    docker compose -f docker-compose.yml -p omnionecx-wooriib --env-file $EnvFile exec $Service @Command
 } else {
     # .staging\omnionecx.env가 없으면(예: deploy 스크립트를 거치지 않고 직접
     # docker compose로 띄운 경우) -p(프로젝트명)만으로 접속을 시도한다.
-    docker compose -p omnionecx exec $Service @Command
+    docker compose -p omnionecx-wooriib exec $Service @Command
 }

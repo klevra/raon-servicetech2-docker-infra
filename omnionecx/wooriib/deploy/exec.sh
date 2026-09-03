@@ -31,9 +31,9 @@ CMD=("$@")
 
 ENV_FILE="${SCRIPT_DIR}/.staging/omnionecx.env"
 if [[ -f "$ENV_FILE" ]]; then
-  exec docker compose -f docker-compose.yml -p omnionecx --env-file "$ENV_FILE" exec "$SERVICE" "${CMD[@]}"
+  exec docker compose -f docker-compose.yml -p omnionecx-wooriib --env-file "$ENV_FILE" exec "$SERVICE" "${CMD[@]}"
 else
   # .staging/omnionecx.env가 없으면(예: deploy 스크립트를 거치지 않고 직접
   # docker compose로 띄운 경우) -p(프로젝트명)만으로 접속을 시도한다.
-  exec docker compose -p omnionecx exec "$SERVICE" "${CMD[@]}"
+  exec docker compose -p omnionecx-wooriib exec "$SERVICE" "${CMD[@]}"
 fi

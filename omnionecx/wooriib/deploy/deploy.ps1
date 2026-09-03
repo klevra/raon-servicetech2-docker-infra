@@ -160,7 +160,7 @@ $DbImage = "$LocalRegistry/$Namespace/omnionecx-db-wooriib:$DbVersionTag"
 
 $DsSrc = Join-Path $VerifierRoot "config\config\application-datasource.properties"
 if ($UpdateDbConfig) {
-    $DbContainer = Ask "DB 컨테이너 이름" "db"
+    $DbContainer = Ask "DB 컨테이너 이름" "mariadb-1.0.0.9"
     $DbName = Ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "VC_VERIFIER"
     $AppUser = Ask "공용 앱 계정 이름" "omnione"
     $AppPassword = Ask-Secret "공용 앱 계정 비밀번호" "0mN1DB"
@@ -206,7 +206,7 @@ if ([string]::IsNullOrEmpty($DbRootPassword)) {
 Write-Host ""
 Write-Host "-------- verifier --------"
 Write-Info "verifier 설정 루트: $VerifierRoot (앞에서 이미 입력받음)"
-$VfContainer = Ask "verifier 컨테이너 이름" "verifier"
+$VfContainer = Ask "verifier 컨테이너 이름" "verifier-1.3.25-fix"
 $VfPort = Ask "verifier 포트" "48085"
 $VerifierImage = "$LocalRegistry/$Namespace/omnionecx-verifier-wooriib:$VerifierVersionTag"
 
@@ -219,7 +219,7 @@ if (Test-Path $defaultOacxRoot -PathType Container) {
 } else {
     $OacxRoot = Ask "OACX 설정 루트 경로 (config/ 가 있는 위치)" "D:\03. Docker\sandbox\oacx"
 }
-$OacxContainer = Ask "OACX 컨테이너 이름" "oacx"
+$OacxContainer = Ask "OACX 컨테이너 이름" "oacx-1.0.0.9"
 $ContextPath = Ask "OACX Context path (URL: http://localhost:<포트>/<이 값>/)" "oacx"
 $OacxHostPort = Ask "OACX 포트" "8080"
 $OacxImage = "$LocalRegistry/$Namespace/omnionecx-oacx-wooriib:$OacxVersionTag"
@@ -413,12 +413,12 @@ NETWORK_NAME=$NetworkName
 $env:DB_ROOT_PASSWORD = $DbRootPassword
 $env:APP_PASSWORD = $AppPassword
 Write-Info "docker compose up -d 를 실행합니다 (db -> verifier -> oacx 순서로 기동, 시간이 걸릴 수 있습니다)..."
-docker compose -f (Join-Path $ScriptDir "docker-compose.yml") -p omnionecx --env-file $EnvFile up -d
+docker compose -f (Join-Path $ScriptDir "docker-compose.yml") -p omnionecx-wooriib --env-file $EnvFile up -d
 $ComposeExit = $LASTEXITCODE
 Remove-Item Env:\DB_ROOT_PASSWORD -ErrorAction SilentlyContinue
 Remove-Item Env:\APP_PASSWORD -ErrorAction SilentlyContinue
 if ($ComposeExit -ne 0) {
-    Write-Err2 "docker compose up 실패 (종료 코드 $ComposeExit). 'docker compose -f docker-compose.yml -p omnionecx --env-file $EnvFile logs'로 확인하세요."
+    Write-Err2 "docker compose up 실패 (종료 코드 $ComposeExit). 'docker compose -f docker-compose.yml -p omnionecx-wooriib --env-file $EnvFile logs'로 확인하세요."
     exit 1
 }
 
