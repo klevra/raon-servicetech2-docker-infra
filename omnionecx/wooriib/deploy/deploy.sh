@@ -69,6 +69,25 @@ confirm() {
   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
+# 이 PC가 실제 네트워크에서 쓰는 IP를 최대한 정확히 추정한다(기본 게이트웨이가
+# 잡혀있는 인터페이스 기준 -- 루프백/APIPA/가상 어댑터를 걸러내는 것보다
+# 훨씬 안정적). 실패하면 빈 문자열을 반환하고 호출부에서 수동 입력을 받는다.
+detect_local_ip() {
+  local ip=""
+  if command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | sed -nE 's/.*src ([0-9.]+).*/\1/p' | head -n1)"
+  fi
+  if [[ -z "$ip" ]] && command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
+    local iface
+    iface="$(route get 1.1.1.1 2>/dev/null | awk '/interface:/{print $2}')"
+    [[ -n "$iface" ]] && ip="$(ipconfig getifaddr "$iface" 2>/dev/null)"
+  fi
+  if [[ -z "$ip" ]] && command -v powershell.exe >/dev/null 2>&1; then
+    ip="$(powershell.exe -NoProfile -Command '(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" } | Select-Object -First 1).IPv4Address.IPAddress' 2>/dev/null | tr -d '\r\n')"
+  fi
+  echo "$ip"
+}
+
 confirm_no() {
   local prompt="${1:-계속 진행할까요?}" reply
   read -r -p "$prompt (y/n) [n]: " reply
@@ -217,6 +236,15 @@ ask "OACX 포트" "8080"
 OACX_HOST_PORT="$REPLY"
 OACX_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-oacx-wooriib:${OACX_VERSION_TAG}"
 
+DETECTED_IP="$(detect_local_ip)"
+if [[ -n "$DETECTED_IP" ]]; then
+  ok "이 PC의 IP를 감지했습니다: $DETECTED_IP"
+else
+  warn "이 PC의 IP를 자동으로 감지하지 못했습니다. 직접 입력해주세요."
+fi
+ask "oacx '앱 호출 테스트' 페이지에 표시할 OACX 서버 주소 (이 PC에서 접근 가능한 IP)" "http://${DETECTED_IP:-localhost}:${OACX_HOST_PORT}"
+OACX_PUBLIC_URL="$REPLY"
+
 echo
 {
 echo "======================= 실행 요약 ======================="
@@ -230,6 +258,7 @@ echo " 공용 앱 계정  : $APP_USER"
 echo " PARTNER_CODE  : $PARTNER_CODE"
 echo " verifier      : $VERIFIER_IMAGE / $VF_CONTAINER (포트 ${VF_PORT}), root=$VERIFIER_ROOT"
 echo " oacx          : $OACX_IMAGE / $OACX_CONTAINER (포트 ${OACX_HOST_PORT}, /$CONTEXT_PATH), root=$OACX_ROOT"
+echo " OACX_PUBLIC_URL : $OACX_PUBLIC_URL"
 [[ "$GENERATED_PW" -eq 1 ]] && echo " 생성된 root 비밀번호 : $DB_ROOT_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
 echo "==========================================================="
 }
@@ -380,6 +409,7 @@ VF_LOG_ROOT=${VF_LOG_ROOT}
 OACX_IMAGE=${OACX_IMAGE}
 OACX_CONTAINER=${OACX_CONTAINER}
 OACX_HOST_PORT=${OACX_HOST_PORT}
+OACX_PUBLIC_URL=${OACX_PUBLIC_URL}
 OACX_CONFIG_DIR=${OACX_CONFIG_DIR}
 CONTEXT_XML=${CONTEXT_XML}
 CONTEXT_PATH=${CONTEXT_PATH}

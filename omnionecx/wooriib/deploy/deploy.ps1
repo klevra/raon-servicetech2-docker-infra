@@ -63,6 +63,17 @@ function Ask-Secret([string]$Prompt, [string]$Default = "") {
     return $val
 }
 
+# 이 PC가 실제 네트워크에서 쓰는 IP를 최대한 정확히 추정한다(기본
+# 게이트웨이가 잡혀있는 인터페이스 기준 -- 루프백/APIPA/가상 어댑터를
+# 걸러내는 것보다 훨씬 안정적). 실패하면 빈 문자열을 반환한다.
+function Get-LocalIp {
+    try {
+        $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" } | Select-Object -First 1
+        if ($cfg) { return $cfg.IPv4Address.IPAddress }
+    } catch { }
+    return ""
+}
+
 function Confirm([string]$Prompt = "계속 진행할까요?") {
     $val = Read-Host "$Prompt (y/n) [y]"
     if ([string]::IsNullOrWhiteSpace($val)) { $val = "y" }
@@ -213,6 +224,15 @@ $ContextPath = Ask "OACX Context path (URL: http://localhost:<포트>/<이 값>/
 $OacxHostPort = Ask "OACX 포트" "8080"
 $OacxImage = "$LocalRegistry/$Namespace/omnionecx-oacx-wooriib:$OacxVersionTag"
 
+$DetectedIp = Get-LocalIp
+if ($DetectedIp) {
+    Write-Ok "이 PC의 IP를 감지했습니다: $DetectedIp"
+} else {
+    Write-Warn2 "이 PC의 IP를 자동으로 감지하지 못했습니다. 직접 입력해주세요."
+    $DetectedIp = "localhost"
+}
+$OacxPublicUrl = Ask "oacx '앱 호출 테스트' 페이지에 표시할 OACX 서버 주소 (이 PC에서 접근 가능한 IP)" "http://${DetectedIp}:$OacxHostPort"
+
 Write-Host ""
 Write-Host "======================= 실행 요약 ======================="
 Write-Host " 사이트        : $Site (OACX $OacxVersionTag / verifier $VerifierVersionTag)"
@@ -226,6 +246,7 @@ Write-Host " 공용 앱 계정  : $AppUser"
 Write-Host " PARTNER_CODE  : $PartnerCode"
 Write-Host " verifier      : $VerifierImage / $VfContainer (포트 $VfPort), root=$VerifierRoot"
 Write-Host " oacx          : $OacxImage / $OacxContainer (포트 $OacxHostPort, /$ContextPath), root=$OacxRoot"
+Write-Host " OACX_PUBLIC_URL : $OacxPublicUrl"
 if ($GeneratedPw) { Write-Host " 생성된 root 비밀번호 : $DbRootPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
 Write-Host "==========================================================="
 if (-not (Confirm "위 설정으로 전체 스택을 배포할까요?")) {
@@ -381,6 +402,7 @@ VF_LOG_ROOT=$VfLogRoot
 OACX_IMAGE=$OacxImage
 OACX_CONTAINER=$OacxContainer
 OACX_HOST_PORT=$OacxHostPort
+OACX_PUBLIC_URL=$OacxPublicUrl
 OACX_CONFIG_DIR=$OacxConfigDir
 CONTEXT_XML=$ContextXml
 CONTEXT_PATH=$ContextPath

@@ -555,3 +555,16 @@ jboss-deployment-structure.xml)는 Dockerfile 빌드 시점에 삭제하도록 �
 healthy, HTTP 200/200, 실행 중인 oacx 컨테이너 안에서도 파일 구성 재확인.
 
 **상태**: ✅ `omnionecx-oacx-wooriib:1.0.0.9` 레지스트리 이미지 갱신 완료(digest sha256:2f27730b...).
+
+### omnionecx/wooriib oacx: event.js의 OACX 서버 주소를 배포 시점 값으로 일반화
+
+**문제**: `app/module/event.js`("앱 호출 테스트" 페이지)에 OACX 서버 주소가 하드코딩되어 있었다(회사 기본값 `https://cx.raonsecure.co.kr:18543`, 이후 소스에서는 특정 PC의 IP `http://10.48.17.111:8080`). app/은 이미지에 빌트인이라, 이 값은 빌드 시점에 고정된다 -- 다른 PC에서 같은 이미지를 배포하면 그 PC의 실제 IP와 무관하게 예전 값이 그대로 나온다는 문제를 사용자가 지적.
+
+**해결**: DB의 PARTNER_CODE/OPER_SORT와 동일한 패턴 적용.
+- `event.js`의 주소를 `__OACX_PUBLIC_URL__` 플레이스홀더로 교체(git 비추적 실제 app 소스 파일에 반영).
+- `docker-entrypoint-wrapper.sh`를 oacx 이미지에 추가(root로 실행되어 별도 권한 조정 불필요) -- 컨테이너 기동 시 `OACX_PUBLIC_URL` 환경변수 값으로 플레이스홀더를 치환한 뒤 원래 Tomcat 기동 커맨드(`catalina.sh run`)를 그대로 실행. Dockerfile의 `ENTRYPOINT`/`CMD`를 이 래퍼로 감쌈(base 이미지의 CMD는 상속되어 그대로 유지됨).
+- `deploy.sh`/`.ps1`에 `detect_local_ip`/`Get-LocalIp` 함수 추가 -- 기본 게이트웨이가 잡힌 인터페이스 기준으로 이 PC의 실제 네트워크 IP를 자동 감지해 기본값으로 제시하고, 사용자가 확인/수정할 수 있도록 프롬프트 추가. Windows/Git Bash는 PowerShell의 `Get-NetIPConfiguration`을 호출해 동일 로직 재사용.
+
+**테스트**: `docker run -e OACX_PUBLIC_URL=<값>`으로 서로 다른 두 값(10.48.17.111:8080, 192.168.1.99:9999)을 줘서 실제로 다르게 치환되는지 확인. 이어서 `deploy.sh` 전체 재실행 -- IP 자동 감지(10.48.17.111) 정상, db/verifier/oacx 전부 healthy, HTTP 200/200, 실행 중인 oacx 컨테이너 안에서 event.js 값도 정확히 반영된 것 확인.
+
+**상태**: ✅ `omnionecx-oacx-wooriib:1.0.0.9` 레지스트리 이미지 갱신 완료(digest sha256:e50d641f...). 이제 다른 PC에 배포해도 그 PC의 IP를 물어봐서(자동 감지 + 확인) 정확한 값이 반영됨.

@@ -12,6 +12,12 @@
 # web.xml의 config.file 경로(./WEB-INF/config/server.properties ->
 # /config/server.properties)를 빌드 시점에 1회 패치해둔다.
 #
+# app/module/event.js(앱 호출 테스트 페이지)의 OACX 서버 주소는 배포하는
+# PC/환경마다 달라서 이미지에 고정할 수 없다 -- __OACX_PUBLIC_URL__
+# 플레이스홀더로 남겨두고, docker-entrypoint-wrapper.sh가 컨테이너 기동
+# 시 OACX_PUBLIC_URL 환경변수 값으로 1회 치환한다(DB의 PARTNER_CODE/
+# OPER_SORT 처리와 동일한 패턴).
+#
 # 빌드 컨텍스트에는 이 Dockerfile과 같은 위치에 실제 wooriib용 oacx의 app/
 # 디렉터리(index.html, WEB-INF/ 등)가 있어야 한다. (app/은 실제 배포
 # 산출물이라 git에는 커밋하지 않음 -- .gitignore 확인)
@@ -42,3 +48,8 @@ RUN mv /app/WEB-INF/web_normal.xml /app/WEB-INF/web.xml \
           /app/WEB-INF/jboss-deployment-structure.xml \
  && sed -i -E "s#(<param-value>)\./WEB-INF/config/server\.properties(</param-value>)#\1/config/server.properties\2#" \
     /app/WEB-INF/web.xml
+
+COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
+RUN chmod +x /docker-entrypoint-wrapper.sh
+ENTRYPOINT ["/docker-entrypoint-wrapper.sh"]
+CMD ["catalina.sh", "run"]
