@@ -532,3 +532,26 @@
 **테스트**: `D:\99_project\Docker\sandbox`에 deploy.sh/docker-compose.yml/exec.sh를 임시로 복사해(실 sandbox verifier/oacx config와 나란히) 실행 -- db/verifier/oacx 전부 healthy, HTTP 200/200, `PARTNER_CODE=raon` 확인. 테스트 산출물은 전부 정리, sandbox 원본은 유지.
 
 **상태**: ✅ wooriib 트랙 1차 완료(이미지 3종 레지스트리 등록 + 실전 배포 검증). 저축은행중앙회(fsb), AIA생명(aia)은 아직 미착수.
+
+### omnionecx/wooriib oacx: web.xml 처리를 mv + 불필요 파일 삭제로 명시화
+
+이전 커밋에서는 `cp web_normal.xml web.xml`로 web.xml을 만들면서 원본
+web_normal.xml이 이미지 안에 그대로 남아있었다. 요청에 따라 더 명시적으로:
+`mv web_normal.xml web.xml`로 실제 파일명을 바꾸고, 이 사이트에서 쓰지
+않는 나머지 배포 서술자(web_mtranskey.xml, JBoss용 jboss-web.xml/
+jboss-deployment-structure.xml)는 Dockerfile 빌드 시점에 삭제하도록 변경.
+
+**중간에 겪은 사고**: `deploy.sh`가 배포 흐름 안에서 항상 `docker pull`을
+호출하는데, 로컬에서 새로 빌드한 이미지를 테스트하려고 배포 스크립트를
+돌리면 그 pull이 레지스트리의 예전 이미지로 로컬 태그를 덮어써버려서,
+실제로는 옛날 이미지로 테스트/push가 되어버리는 문제가 있었다(push 후
+직접 pull해서 WEB-INF를 열어보고서야 발견). 해결: 로컬 빌드 → 그
+자리에서 바로 push(중간에 어떤 pull도 하지 않음) → 그 다음에 레지스트리
+재확인 겸 전체 스택 배포 테스트, 순서를 지켜야 함.
+
+**테스트**: `docker build --no-cache`로 새로 빌드 후 곧바로 push, 레지스트리에서
+다시 pull해 `/app/WEB-INF`에 `web.xml`만 남고 나머지가 삭제됐음을 직접
+확인. 이어서 sandbox 데이터로 전체 스택 재배포 -- db/verifier/oacx 전부
+healthy, HTTP 200/200, 실행 중인 oacx 컨테이너 안에서도 파일 구성 재확인.
+
+**상태**: ✅ `omnionecx-oacx-wooriib:1.0.0.9` 레지스트리 이미지 갱신 완료(digest sha256:2f27730b...).

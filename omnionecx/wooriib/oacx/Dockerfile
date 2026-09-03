@@ -32,8 +32,13 @@ LABEL maintainer="servicetech2" \
 # 생성 로직을 그대로 재사용할 수 있게 한다.
 COPY app/ /app/
 
-# web_normal.xml -> web.xml로 지정한 뒤, config.file을 절대경로
-# (/config/server.properties)로 패치.
-RUN cp /app/WEB-INF/web_normal.xml /app/WEB-INF/web.xml \
+# web_normal.xml -> web.xml로 파일명을 실제로 바꾸고, 쓰지 않는 나머지
+# 배포 서술자(web_mtranskey.xml, JBoss용 jboss-web.xml/
+# jboss-deployment-structure.xml)는 Tomcat 배포에 필요 없으므로 삭제한다.
+# 그 다음 config.file을 절대경로(/config/server.properties)로 패치.
+RUN mv /app/WEB-INF/web_normal.xml /app/WEB-INF/web.xml \
+ && rm -f /app/WEB-INF/web_mtranskey.xml \
+          /app/WEB-INF/jboss-web.xml \
+          /app/WEB-INF/jboss-deployment-structure.xml \
  && sed -i -E "s#(<param-value>)\./WEB-INF/config/server\.properties(</param-value>)#\1/config/server.properties\2#" \
     /app/WEB-INF/web.xml
