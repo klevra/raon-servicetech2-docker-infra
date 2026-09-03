@@ -513,3 +513,22 @@
 **테스트**: db 이미지를 재빌드/재푸시 후 (1) 기본값(raon/dev), (2) PARTNER_CODE=hanabank + OPER_SORT=prod 커스텀 조합을 각각 standalone 컨테이너로 검증. 이어서 실제 sandbox 데이터로 `deploy.sh` 전체를 PARTNER_CODE=hanabank 입력으로 재실행 -- DB와 provider.json 양쪽에 hanabank가 동일하게 반영되고 db/verifier/oacx 전부 healthy, HTTP 200/200 확인. 테스트 아티팩트 전부 정리, 원본 sandbox 무결성 재확인.
 
 **상태**: ✅ deploy/ 폴더 스켈레톤 + PARTNER_CODE 일반화 전부 실전 검증 완료.
+
+### omnionecx/wooriib(우리투자증권): 첫 사이트별 이미지 빌드 + 실전 배포 검증
+
+`omnionecx/1.0.0.12/` 패턴을 그대로 따라 우리투자증권(wooriib) 전용 이미지를 빌드하고 레지스트리에 등록했다. 실제 산출물(`D:\99_project\Docker\sandbox`에 배치된 verifier 1.3.25-fix JAR, OACX 1.0.0.9 WAR, DDL/DML)로 처음부터 끝까지 검증.
+
+**등록된 이미지**:
+- `192.168.0.168:5000/servicetech2/omnionecx-db-wooriib:latest` (사이트 전용 DDL/DML 빌트인, 독립 버전 없어 latest 고정)
+- `192.168.0.168:5000/servicetech2/omnionecx-verifier-wooriib:1.3.25_fix`
+- `192.168.0.168:5000/servicetech2/omnionecx-oacx-wooriib:1.0.0.9`
+
+**사이트 전용이라 새로 겪은 이슈 2건**:
+1. **oacx WAR에 web.xml이 없고 web_normal.xml/web_mtranskey.xml 두 변형만 있음** — JBoss 배포용 산출물(jboss-web.xml 등)까지 같이 들어있어서, Tomcat용으로는 둘 중 하나를 web.xml로 지정해야 함. 사용자 확인 후 web_normal.xml(보안키패드 미사용) 채택 -- Dockerfile에서 `COPY app/ /app/` 직후 `cp web_normal.xml web.xml`을 추가해 빌드 시점에 1회 처리.
+2. **OACX_PROVIDER 초기 데이터 손상**: `52_insert_data.sql`의 `cotoss-identify` 항목이 `cotcotoss-identifyoss`(21자)로 중복 손상되어 있어 `PROVIDER_ID varchar(20)` 컬럼 길이 초과로 DB 초기화 실패. 사용자 확인 후 값을 `cotoss-identify`로 수정. 추가로 `OACX_PROVIDER.PROVIDER_ID` 컬럼 자체도 `varchar(20)` → `varchar(25)`로 확장(향후 유사 문제 방지).
+
+**배포 스크립트**: `omnionecx/1.0.0.12/deploy/`를 복사해 이미지 참조만 사이트 전용으로 교체(VERSION 변수 대신 `DB_VERSION_TAG`/`VERIFIER_VERSION_TAG`/`OACX_VERSION_TAG`를 스크립트에 고정값으로 박아둠 -- 폴더명이 이제 버전이 아니라 사이트 코드라서). docker-compose.yml은 완전히 파라미터화되어 있어 변경 없이 그대로 사용.
+
+**테스트**: `D:\99_project\Docker\sandbox`에 deploy.sh/docker-compose.yml/exec.sh를 임시로 복사해(실 sandbox verifier/oacx config와 나란히) 실행 -- db/verifier/oacx 전부 healthy, HTTP 200/200, `PARTNER_CODE=raon` 확인. 테스트 산출물은 전부 정리, sandbox 원본은 유지.
+
+**상태**: ✅ wooriib 트랙 1차 완료(이미지 3종 레지스트리 등록 + 실전 배포 검증). 저축은행중앙회(fsb), AIA생명(aia)은 아직 미착수.
