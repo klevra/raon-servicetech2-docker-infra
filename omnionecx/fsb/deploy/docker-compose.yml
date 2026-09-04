@@ -107,6 +107,11 @@ services:
       retries: 24
 
 networks:
+  # 여러 사이트(wooriib/fsb/...)가 같은 이름의 네트워크를 공유해서 쓸 수 있게
+  # external로 선언한다 -- external이 아니면 compose가 이 네트워크를 자기
+  # project 소유로 라벨링하려다, 이미 다른 project가 만들어둔 네트워크와
+  # 라벨이 달라 "found but has incorrect label" 오류로 기동 자체가 실패한다.
+  # 실제 생성은 deploy.sh/.ps1이 compose 실행 전에 없으면 만들어둔다.
   omnionecx:
     name: ${NETWORK_NAME}
-    driver: bridge
+    external: true

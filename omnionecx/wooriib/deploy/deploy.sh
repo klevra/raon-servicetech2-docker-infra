@@ -4,9 +4,14 @@
 #
 # 지원 환경 : Linux / macOS / Windows(Git Bash, WSL)
 # 전제조건 : oracle/registry/setup-registry.sh 로 레지스트리가 떠있어야 하고,
-#            db/verifier/oacx 각각의 build-and-push.sh 로 이 사이트 전용
-#            이미지(omnionecx-{db,verifier,oacx}-wooriib)가 레지스트리에
-#            이미 등록되어 있어야 함.
+#            db/verifier/oacx 각각의 build-and-push.sh 로 이 사이트가 쓰는
+#            이미지가 레지스트리에 이미 등록되어 있어야 함. db/verifier/oacx는
+#            사이트별 리포지토리가 아니라 컴포넌트당 하나의 리포지토리로
+#            통합 관리된다 -- DB는 사이트명 태그(omnionecx-db:wooriib)만 쓰고,
+#            verifier/oacx는 벤더 표준판이라 순수 버전 태그(omnionecx-verifier:
+#            1.3.25_fix)를 쓰며 "wooriib"는 그 버전을 가리키는 이동 태그일
+#            뿐이다. 이 사이트 전용 커스텀/포크 빌드가 생기면 그때는
+#            "wooriib-버전" 형태로 별도 관리한다.
 #
 # omnionecx/default 트랙과의 차이 (모두 상위 폴더(../db, ../verifier, ../oacx)의
 # 세 Dockerfile에 빌트인됨):
@@ -30,7 +35,12 @@ cd "$SCRIPT_DIR"
 
 NAMESPACE="servicetech2"
 SITE="우리투자증권(wooriib)"
-DB_VERSION_TAG="latest"          # 사이트 전용 DB 이미지는 독립 버전 없이 latest 고정
+# db/verifier/oacx가 각각 하나의 리포지토리로 통합 관리된다. verifier/oacx는
+# 커스텀 포크가 아닌 벤더 표준판이라 태그도 순수 버전 번호(위 *_VERSION_TAG)를
+# 그대로 쓰고, SITE_TAG(사이트명)는 "지금 이 사이트가 쓰는 버전"을 가리키는
+# 이동 태그로만 쓴다 -- 나중에 이 사이트 전용으로 커스텀/포크된 빌드가 생기면
+# 그때는 "sitetag-version" 형태(예: wooriib-1.3.42)로 별도 관리한다.
+SITE_TAG="wooriib"
 VERIFIER_VERSION_TAG="1.3.25_fix"
 OACX_VERSION_TAG="1.0.0.9"
 
@@ -176,6 +186,11 @@ ask "공용 네트워크 이름" "omnionecx-net"
 NETWORK_NAME="$REPLY"
 
 echo
+info "docker compose 프로젝트 이름은 위 네트워크 이름과 별개입니다 -- 같은 PC에서 이 사이트를 여러 벌(예: 병렬 테스트) 띄우려면 서로 다르게 지정하세요."
+ask "docker compose 프로젝트 이름" "omnionecx-wooriib"
+COMPOSE_PROJECT="$REPLY"
+
+echo
 ask "VF_ORGANIZATION.PARTNER_CODE / provider.json partnerCode 공통값" "raon"
 PARTNER_CODE="$REPLY"
 
@@ -201,33 +216,44 @@ fi
 
 echo
 echo "-------- DB --------"
-DB_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-db-wooriib:${DB_VERSION_TAG}"
+DB_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-db:${SITE_TAG}"
 
 DS_SRC="${VERIFIER_ROOT}/config/config/application-datasource.properties"
+NEED_DB_PROMPT=0
 if [[ "$UPDATE_DB_CONFIG" -eq 1 ]]; then
-  ask "DB 컨테이너 이름" "mariadb-1.0.0.9"
-  DB_CONTAINER="$REPLY"
-  ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "VC_VERIFIER"
-  DB_NAME="$REPLY"
-  ask "공용 앱 계정 이름" "omnione"
-  APP_USER="$REPLY"
-  ask_secret "공용 앱 계정 비밀번호" "0mN1DB"
-  APP_PASSWORD="$REPLY"
+  NEED_DB_PROMPT=1
 else
+  DB_CONTAINER=""; DB_NAME=""; APP_USER=""; APP_PASSWORD=""
   if [[ ! -f "$DS_SRC" ]]; then
-    err "DB 접속정보를 config에서 읽어와야 하는데 파일을 찾을 수 없습니다: $DS_SRC"
-    exit 1
+    warn "DB 접속정보를 config에서 읽어와야 하는데 파일을 찾을 수 없습니다: $DS_SRC"
+    warn "직접 입력받는 방식으로 대신 진행합니다."
+    NEED_DB_PROMPT=1
+  else
+    DERIVED_URL="$(grep -oE 'spring\.datasource\.url=jdbc:mariadb://[^[:space:]]+' "$DS_SRC" | head -n1)"
+    DB_CONTAINER="$(sed -E 's#.*//([^:/]+).*#\1#' <<< "$DERIVED_URL")"
+    DB_NAME="$(sed -E 's#.*/([^/?[:space:]]+)$#\1#' <<< "$DERIVED_URL")"
+    APP_USER="$(grep -oE 'spring\.datasource\.hikari\.username=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
+    APP_PASSWORD="$(grep -oE 'spring\.datasource\.hikari\.password=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
+    if [[ -z "$DB_CONTAINER" || -z "$DB_NAME" || -z "$APP_USER" ]]; then
+      warn "config에서 DB 접속정보를 추출하지 못했습니다 ($DS_SRC 확인 필요) -- 직접 입력받는 방식으로 대신 진행합니다."
+      NEED_DB_PROMPT=1
+    else
+      ok "config에서 DB 접속정보를 그대로 가져왔습니다: host(컨테이너명)=${DB_CONTAINER}, db=${DB_NAME}, user=${APP_USER}"
+    fi
   fi
-  DERIVED_URL="$(grep -oE 'spring\.datasource\.url=jdbc:mariadb://[^[:space:]]+' "$DS_SRC" | head -n1)"
-  DB_CONTAINER="$(sed -E 's#.*//([^:/]+).*#\1#' <<< "$DERIVED_URL")"
-  DB_NAME="$(sed -E 's#.*/([^/?[:space:]]+)$#\1#' <<< "$DERIVED_URL")"
-  APP_USER="$(grep -oE 'spring\.datasource\.hikari\.username=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
-  APP_PASSWORD="$(grep -oE 'spring\.datasource\.hikari\.password=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
-  if [[ -z "$DB_CONTAINER" || -z "$DB_NAME" || -z "$APP_USER" ]]; then
-    err "config에서 DB 접속정보를 추출하지 못했습니다 ($DS_SRC 확인 필요)."
-    exit 1
-  fi
-  ok "config에서 DB 접속정보를 그대로 가져왔습니다: host(컨테이너명)=${DB_CONTAINER}, db=${DB_NAME}, user=${APP_USER}"
+fi
+if [[ "$NEED_DB_PROMPT" -eq 1 ]]; then
+  ask "DB 컨테이너 이름" "${DB_CONTAINER:-mariadb-1.0.0.9}"
+  DB_CONTAINER="$REPLY"
+  ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "${DB_NAME:-VC_VERIFIER}"
+  DB_NAME="$REPLY"
+  ask "공용 앱 계정 이름" "${APP_USER:-omnione}"
+  APP_USER="$REPLY"
+  ask_secret "공용 앱 계정 비밀번호" "${APP_PASSWORD:-0mN1DB}"
+  APP_PASSWORD="$REPLY"
+  # 직접 입력받은 이상, 값이 실제 파일에도 반영되어야 하니 이후 패치
+  # 단계에서 이 값들을 강제로 적용하도록 표시한다.
+  UPDATE_DB_CONFIG=1
 fi
 DEFAULT_DB_PORT="$(find_available_port 3306 "$DB_CONTAINER")"
 if [[ "$DEFAULT_DB_PORT" != "3306" ]]; then
@@ -263,7 +289,7 @@ if [[ "$DEFAULT_VF_PORT" != "48085" ]]; then
 fi
 ask "verifier 포트" "$DEFAULT_VF_PORT"
 VF_PORT="$REPLY"
-VERIFIER_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-verifier-wooriib:${VERIFIER_VERSION_TAG}"
+VERIFIER_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-verifier:${SITE_TAG}"
 
 DETECTED_IP="$(detect_local_ip)"
 if [[ -n "$DETECTED_IP" ]]; then
@@ -294,7 +320,7 @@ if [[ "$DEFAULT_OACX_PORT" != "8080" ]]; then
 fi
 ask "OACX 포트" "$DEFAULT_OACX_PORT"
 OACX_HOST_PORT="$REPLY"
-OACX_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-oacx-wooriib:${OACX_VERSION_TAG}"
+OACX_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-oacx:${SITE_TAG}"
 
 ask "oacx '앱 호출 테스트' 페이지에 표시할 OACX 서버 주소 (이 PC에서 접근 가능한 IP)" "http://${DETECTED_IP:-localhost}:${OACX_HOST_PORT}"
 OACX_PUBLIC_URL="$REPLY"
@@ -306,6 +332,7 @@ echo " 사이트        : $SITE (OACX ${OACX_VERSION_TAG} / verifier ${VERIFIER_
 echo " 배포 환경     : $DEPLOY_ENV (oper.mode/OPER_SORT=${OPER_SORT})"
 echo " config 업데이트 : $([[ "$UPDATE_DB_CONFIG" -eq 1 ]] && echo "예 (DB 접속정보를 아래 값으로 덮어씀)" || echo "아니오 (config 원본 값 그대로 사용, DB를 그 값에 맞춰 생성)")"
 echo " 네트워크      : $NETWORK_NAME"
+echo " compose 프로젝트 : $COMPOSE_PROJECT"
 echo " DB            : $DB_IMAGE / $DB_CONTAINER / db=$DB_NAME / port=$DB_PORT"
 echo " DB 데이터 경로 : $DB_DATA_DIR"
 echo " 공용 앱 계정  : $APP_USER"
@@ -509,15 +536,24 @@ CONTEXT_XML=${CONTEXT_XML}
 CONTEXT_PATH=${CONTEXT_PATH}
 OX_LOG_ROOT=${OX_LOG_ROOT}
 NETWORK_NAME=${NETWORK_NAME}
+COMPOSE_PROJECT=${COMPOSE_PROJECT}
 ENVEOF
+
+# docker-compose.yml에서 이 네트워크를 external로 선언해뒀으므로(여러
+# 사이트가 공유), compose가 대신 만들어주지 않는다 -- 없으면 여기서 미리
+# 만들어둔다(이미 있으면 조용히 통과).
+if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+  info "네트워크(${NETWORK_NAME})가 없어 새로 만듭니다."
+  docker network create "$NETWORK_NAME" >/dev/null
+fi
 
 export DB_ROOT_PASSWORD APP_PASSWORD
 info "docker compose up -d 를 실행합니다 (db → verifier → oacx 순서로 기동, 시간이 걸릴 수 있습니다)..."
 COMPOSE_STATUS=0
-docker compose -f "${SCRIPT_DIR}/docker-compose.yml" -p omnionecx-wooriib --env-file "$ENV_FILE" up -d || COMPOSE_STATUS=$?
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" -p "$COMPOSE_PROJECT" --env-file "$ENV_FILE" up -d || COMPOSE_STATUS=$?
 export -n DB_ROOT_PASSWORD APP_PASSWORD
 if [[ "$COMPOSE_STATUS" -ne 0 ]]; then
-  err "docker compose up 실패 (종료 코드 ${COMPOSE_STATUS}). 'docker compose -f docker-compose.yml -p omnionecx-wooriib --env-file ${ENV_FILE} logs'로 확인하세요."
+  err "docker compose up 실패 (종료 코드 ${COMPOSE_STATUS}). 'docker compose -f docker-compose.yml -p ${COMPOSE_PROJECT} --env-file ${ENV_FILE} logs'로 확인하세요."
   exit 1
 fi
 
