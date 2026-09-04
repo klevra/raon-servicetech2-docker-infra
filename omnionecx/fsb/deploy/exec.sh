@@ -31,9 +31,14 @@ CMD=("$@")
 
 ENV_FILE="${SCRIPT_DIR}/.staging/omnionecx.env"
 if [[ -f "$ENV_FILE" ]]; then
-  exec docker compose -f docker-compose.yml -p omnionecx-fsb --env-file "$ENV_FILE" exec "$SERVICE" "${CMD[@]}"
+  # deploy.sh 실행 시 프로젝트 이름을 직접 물어보고 바꿀 수 있으므로(같은
+  # PC에서 이 사이트를 여러 벌 띄우는 경우 등), 하드코딩하지 않고 그때
+  # 저장해둔 값을 그대로 읽어 쓴다.
+  COMPOSE_PROJECT="$(grep -oE '^COMPOSE_PROJECT=.*' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
+  COMPOSE_PROJECT="${COMPOSE_PROJECT:-omnionecx-fsb}"
+  exec docker compose -f docker-compose.yml -p "$COMPOSE_PROJECT" --env-file "$ENV_FILE" exec "$SERVICE" "${CMD[@]}"
 else
   # .staging/omnionecx.env가 없으면(예: deploy 스크립트를 거치지 않고 직접
-  # docker compose로 띄운 경우) -p(프로젝트명)만으로 접속을 시도한다.
+  # docker compose로 띄운 경우) 기본 프로젝트명으로 접속을 시도한다.
   exec docker compose -p omnionecx-fsb exec "$SERVICE" "${CMD[@]}"
 fi

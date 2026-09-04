@@ -1,12 +1,17 @@
 ﻿<#
 .SYNOPSIS
-  OmnioneCX 1.0.0.12 통합 배포 스크립트 (PowerShell) — 버전 고정 이미지 트랙
+  OmnioneCX 통합 배포 스크립트 (PowerShell) — 버전 고정 이미지 트랙 (1.0.0.12)
 
 .DESCRIPTION
   지원 환경: Windows PowerShell 5.1+ / PowerShell 7+
   전제조건 : oracle/registry/setup-registry.ps1 로 레지스트리가 떠있어야 하고,
-             db/verifier/oacx 각각의 build-and-push.sh(.ps1) 로 1.0.0.12
-             이미지가 레지스트리에 이미 등록되어 있어야 함.
+             db/verifier/oacx 각각의 build-and-push.sh(.ps1) 로
+             omnionecx-{db,verifier,oacx}:latest 이미지가 레지스트리에 이미
+             등록되어 있어야 함. db/verifier/oacx는 각각 하나의 리포지토리로
+             통합 관리되고 태그는 실제 버전 번호(verifier=1.3.42,
+             oacx=1.0.0.12)를 쓰며, 이 트랙(기본/default 트랙)은 wooriib가
+             "wooriib" 태그를 이동 태그로 쓰는 것처럼 "latest" 태그를 이동
+             태그로 쓴다.
 
   omnionecx/default 트랙과의 차이 (모두 상위 폴더(..\db, ..\verifier, ..\oacx)의
   세 Dockerfile에 빌트인됨):
@@ -28,7 +33,16 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
 $Namespace = "servicetech2"
-$Version = Split-Path -Leaf (Split-Path -Parent $ScriptDir)   # deploy\의 부모 폴더명(예: 1.0.0.12)이 버전
+$Site = "OmnioneCX 기본 트랙"
+# db/verifier/oacx는 각각 하나의 리포지토리로 통합 관리되고, 태그는 각자의
+# 실제 버전 번호(아래 두 값)를 쓴다. 이 트랙(기본/default 트랙)은 wooriib가
+# "wooriib" 태그를, fsb가 "fsb" 태그를 이동 태그로 쓰는 것과 같은 방식으로
+# "latest" 태그를 이동 태그로 쓴다 -- build-and-push.sh(.ps1)가 실제 버전
+# 태그와 latest 태그를 항상 같이 push하므로, 이 스크립트는 latest만
+# pull하면 된다. 아래 두 값은 화면 표시용 참고 정보일 뿐이다.
+$VerifierAppVersion = "1.3.42"
+$OacxAppVersion = "1.0.0.12"
+$MovingTag = "latest"
 
 function Write-Info($msg)  { Write-Host "[정보] $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)    { Write-Host "[완료] $msg" -ForegroundColor Green }
@@ -59,6 +73,61 @@ function Ask-Secret([string]$Prompt, [string]$Default = "") {
     return $val
 }
 
+# 이 PC가 실제 네트워크에서 쓰는 IP를 최대한 정확히 추정한다(기본
+# 게이트웨이가 잡혀있는 인터페이스 기준 -- 루프백/APIPA/가상 어댑터를
+# 걸러내는 것보다 훨씬 안정적). 실패하면 빈 문자열을 반환한다.
+function Get-LocalIp {
+    try {
+        $cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" } | Select-Object -First 1
+        if ($cfg) { return $cfg.IPv4Address.IPAddress }
+    } catch { }
+    return ""
+}
+
+# 이 호스트 포트를 지금 물고 있는 컨테이너 이름을 반환한다(없으면 빈 문자열).
+function Get-PortOwnerContainer([int]$Port) {
+    try {
+        $lines = docker ps --format '{{.Names}}`t{{.Ports}}' 2>$null
+        foreach ($line in $lines) {
+            $parts = $line -split "`t", 2
+            if ($parts.Count -eq 2 -and $parts[1] -match [regex]::Escape(":$Port->")) { return $parts[0] }
+        }
+    } catch { }
+    return ""
+}
+
+# 이 호스트 포트가 실제로 비어있는지 TCP connect로 확인한다(docker가
+# 점유했든 다른 프로세스가 점유했든 다 잡아낸다).
+function Test-PortInUse([int]$Port) {
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect("127.0.0.1", $Port, $null, $null)
+        $ok = $iar.AsyncWaitHandle.WaitOne(300)
+        $inUse = $ok -and $client.Connected
+        $client.Close()
+        return $inUse
+    } catch { return $false }
+}
+
+# preferred 포트가 비어있으면 그대로 반환. 이미 쓰이고 있어도, 그 포트를
+# 물고 있는 게 Exclude(이번에 내릴 내 컨테이너)라면 재사용 가능하다고
+# 본다. 그 외의 경우(다른 사이트/무관한 프로세스)면 1씩 올려가며 빈 포트를
+# 찾는다(최대 20회 시도).
+function Find-AvailablePort([int]$Port, [string]$Exclude = "") {
+    $tries = 0
+    while ($true) {
+        $owner = Get-PortOwnerContainer $Port
+        if ([string]::IsNullOrEmpty($owner)) {
+            if (-not (Test-PortInUse $Port)) { return $Port }
+        } elseif ($Exclude -and $owner -eq $Exclude) {
+            return $Port
+        }
+        $Port++
+        $tries++
+        if ($tries -ge 20) { return $Port }
+    }
+}
+
 function Confirm([string]$Prompt = "계속 진행할까요?") {
     $val = Read-Host "$Prompt (y/n) [y]"
     if ([string]::IsNullOrWhiteSpace($val)) { $val = "y" }
@@ -84,7 +153,7 @@ function Write-Utf8File([string]$Path, [string]$Content) {
 }
 
 Write-Host "=============================================================="
-Write-Host " OmnioneCX $Version 통합 배포 (버전 고정 이미지 트랙)"
+Write-Host " OmnioneCX $Site 통합 배포 (버전 고정 이미지 트랙, 태그=$MovingTag)"
 Write-Host " (테스트/개발/데모 목적 전용 — 운영 환경 사용 금지)"
 Write-Host "=============================================================="
 
@@ -122,6 +191,10 @@ Write-Host ""
 $NetworkName = Ask "공용 네트워크 이름" "omnionecx-net"
 
 Write-Host ""
+Write-Info "docker compose 프로젝트 이름은 위 네트워크 이름과 별개입니다 -- 같은 PC에서 이 트랙을 여러 벌(예: 병렬 테스트) 띄우려면 서로 다르게 지정하세요."
+$ComposeProject = Ask "docker compose 프로젝트 이름" "omnionecx"
+
+Write-Host ""
 $PartnerCode = Ask "VF_ORGANIZATION.PARTNER_CODE / provider.json partnerCode 공통값" "raon"
 
 Write-Host ""
@@ -141,38 +214,51 @@ if (Test-Path $defaultVerifierRoot -PathType Container) {
 
 Write-Host ""
 Write-Host "-------- DB --------"
-$DbImage = "$LocalRegistry/$Namespace/omnionecx-db:$Version"
+$DbImage = "$LocalRegistry/$Namespace/omnionecx-db:$MovingTag"
 
 $DsSrc = Join-Path $VerifierRoot "config\config\application-datasource.properties"
+$NeedDbPrompt = $false
 if ($UpdateDbConfig) {
-    $DbContainer = Ask "DB 컨테이너 이름" "db"
-    $DbName = Ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "VC_VERIFIER"
-    $AppUser = Ask "공용 앱 계정 이름" "omnione"
-    $AppPassword = Ask-Secret "공용 앱 계정 비밀번호" "0mN1DB"
+    $NeedDbPrompt = $true
 } else {
+    $DbContainer = ""; $DbName = ""; $AppUser = ""; $AppPassword = ""
     if (-not (Test-Path $DsSrc)) {
-        Write-Err2 "DB 접속정보를 config에서 읽어와야 하는데 파일을 찾을 수 없습니다: $DsSrc"
-        exit 1
+        Write-Warn2 "DB 접속정보를 config에서 읽어와야 하는데 파일을 찾을 수 없습니다: $DsSrc"
+        Write-Warn2 "직접 입력받는 방식으로 대신 진행합니다."
+        $NeedDbPrompt = $true
+    } else {
+        $dsSrcContent = Read-Utf8File $DsSrc
+        $urlMatch = [regex]::Match($dsSrcContent, 'spring\.datasource\.url=jdbc:mariadb://([^:/\s]+)[^/\s]*/([^/?\s]+)')
+        $userMatch = [regex]::Match($dsSrcContent, 'spring\.datasource\.hikari\.username=(\S+)')
+        $passMatch = [regex]::Match($dsSrcContent, 'spring\.datasource\.hikari\.password=(\S+)')
+        if (-not $urlMatch.Success -or -not $userMatch.Success) {
+            Write-Warn2 "config에서 DB 접속정보를 추출하지 못했습니다 ($DsSrc 확인 필요) -- 직접 입력받는 방식으로 대신 진행합니다."
+            $NeedDbPrompt = $true
+        } else {
+            $DbContainer = $urlMatch.Groups[1].Value
+            $DbName = $urlMatch.Groups[2].Value
+            $AppUser = $userMatch.Groups[1].Value
+            $AppPassword = if ($passMatch.Success) { $passMatch.Groups[1].Value } else { "" }
+            Write-Ok "config에서 DB 접속정보를 그대로 가져왔습니다: host(컨테이너명)=$DbContainer, db=$DbName, user=$AppUser"
+        }
     }
-    $dsSrcContent = Read-Utf8File $DsSrc
-    $urlMatch = [regex]::Match($dsSrcContent, 'spring\.datasource\.url=jdbc:mariadb://([^:/\s]+)[^/\s]*/([^/?\s]+)')
-    if (-not $urlMatch.Success) {
-        Write-Err2 "config에서 DB 접속정보를 추출하지 못했습니다 ($DsSrc 확인 필요)."
-        exit 1
-    }
-    $DbContainer = $urlMatch.Groups[1].Value
-    $DbName = $urlMatch.Groups[2].Value
-    $userMatch = [regex]::Match($dsSrcContent, 'spring\.datasource\.hikari\.username=(\S+)')
-    $passMatch = [regex]::Match($dsSrcContent, 'spring\.datasource\.hikari\.password=(\S+)')
-    if (-not $userMatch.Success) {
-        Write-Err2 "config에서 DB 접속정보를 추출하지 못했습니다 ($DsSrc 확인 필요)."
-        exit 1
-    }
-    $AppUser = $userMatch.Groups[1].Value
-    $AppPassword = if ($passMatch.Success) { $passMatch.Groups[1].Value } else { "" }
-    Write-Ok "config에서 DB 접속정보를 그대로 가져왔습니다: host(컨테이너명)=$DbContainer, db=$DbName, user=$AppUser"
 }
-$DbPort = Ask "DB 포트 (호스트에 노출할 포트, DBeaver 등 외부 툴 접속용)" "3306"
+if ($NeedDbPrompt) {
+    $dbContainerDefault = if ($DbContainer) { $DbContainer } else { "db" }
+    $DbContainer = Ask "DB 컨테이너 이름" $dbContainerDefault
+    $dbNameDefault = if ($DbName) { $DbName } else { "VC_VERIFIER" }
+    $DbName = Ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" $dbNameDefault
+    $appUserDefault = if ($AppUser) { $AppUser } else { "omnione" }
+    $AppUser = Ask "공용 앱 계정 이름" $appUserDefault
+    $appPasswordDefault = if ($AppPassword) { $AppPassword } else { "0mN1DB" }
+    $AppPassword = Ask-Secret "공용 앱 계정 비밀번호" $appPasswordDefault
+    # 직접 입력받은 이상, 값이 실제 파일에도 반영되어야 하니 이후 패치
+    # 단계에서 이 값들을 강제로 적용하도록 표시한다.
+    $UpdateDbConfig = $true
+}
+$defaultDbPort = Find-AvailablePort 3306 $DbContainer
+if ($defaultDbPort -ne 3306) { Write-Warn2 "3306 포트가 이미 사용 중이라, 대신 $defaultDbPort 을(를) 기본값으로 제안합니다." }
+$DbPort = Ask "DB 포트 (호스트에 노출할 포트, DBeaver 등 외부 툴 접속용)" "$defaultDbPort"
 
 Write-Host ""
 $defaultDbDataDir = Join-Path (Split-Path -Parent $VerifierRoot) "data\db"
@@ -192,8 +278,19 @@ Write-Host ""
 Write-Host "-------- verifier --------"
 Write-Info "verifier 설정 루트: $VerifierRoot (앞에서 이미 입력받음)"
 $VfContainer = Ask "verifier 컨테이너 이름" "verifier"
-$VfPort = Ask "verifier 포트" "48085"
-$VerifierImage = "$LocalRegistry/$Namespace/omnionecx-verifier:$Version"
+$defaultVfPort = Find-AvailablePort 48085 $VfContainer
+if ($defaultVfPort -ne 48085) { Write-Warn2 "48085 포트가 이미 사용 중이라, 대신 $defaultVfPort 을(를) 기본값으로 제안합니다." }
+$VfPort = Ask "verifier 포트" "$defaultVfPort"
+$VerifierImage = "$LocalRegistry/$Namespace/omnionecx-verifier:$MovingTag"
+
+$DetectedIp = Get-LocalIp
+if ($DetectedIp) {
+    Write-Ok "이 PC의 IP를 감지했습니다: $DetectedIp"
+} else {
+    Write-Warn2 "이 PC의 IP를 자동으로 감지하지 못했습니다. 직접 입력해주세요."
+    $DetectedIp = "localhost"
+}
+$VfPublicDomain = Ask "verifier의 외부 콜백 주소(mdl.sp.api-server-domain, 앱이 Profile 요청/VP 제출 시 직접 접근하는 주소)" "http://${DetectedIp}:$VfPort"
 
 Write-Host ""
 Write-Host "-------- oacx --------"
@@ -206,22 +303,29 @@ if (Test-Path $defaultOacxRoot -PathType Container) {
 }
 $OacxContainer = Ask "OACX 컨테이너 이름" "oacx"
 $ContextPath = Ask "OACX Context path (URL: http://localhost:<포트>/<이 값>/)" "oacx"
-$OacxHostPort = Ask "OACX 포트" "8080"
-$OacxImage = "$LocalRegistry/$Namespace/omnionecx-oacx:$Version"
+$defaultOacxPort = Find-AvailablePort 8080 $OacxContainer
+if ($defaultOacxPort -ne 8080) { Write-Warn2 "8080 포트가 이미 사용 중이라, 대신 $defaultOacxPort 을(를) 기본값으로 제안합니다." }
+$OacxHostPort = Ask "OACX 포트" "$defaultOacxPort"
+$OacxImage = "$LocalRegistry/$Namespace/omnionecx-oacx:$MovingTag"
+
+$OacxPublicUrl = Ask "oacx '앱 호출 테스트' 페이지에 표시할 OACX 서버 주소 (이 PC에서 접근 가능한 IP)" "http://${DetectedIp}:$OacxHostPort"
 
 Write-Host ""
 Write-Host "======================= 실행 요약 ======================="
-Write-Host " 버전          : $Version"
+Write-Host " 사이트        : $Site (OACX $OacxAppVersion / verifier $VerifierAppVersion, 태그=$MovingTag)"
 Write-Host " 배포 환경     : $DeployEnv (oper.mode/OperSort=$OperSort)"
 $updateLabel = if ($UpdateDbConfig) { "예 (DB 접속정보를 아래 값으로 덮어씀)" } else { "아니오 (config 원본 값 그대로 사용, DB를 그 값에 맞춰 생성)" }
 Write-Host " config 업데이트 : $updateLabel"
 Write-Host " 네트워크      : $NetworkName"
+Write-Host " compose 프로젝트 : $ComposeProject"
 Write-Host " DB            : $DbImage / $DbContainer / db=$DbName / port=$DbPort"
 Write-Host " DB 데이터 경로 : $DbDataDir"
 Write-Host " 공용 앱 계정  : $AppUser"
 Write-Host " PARTNER_CODE  : $PartnerCode"
 Write-Host " verifier      : $VerifierImage / $VfContainer (포트 $VfPort), root=$VerifierRoot"
+Write-Host " VF_PUBLIC_DOMAIN : $VfPublicDomain"
 Write-Host " oacx          : $OacxImage / $OacxContainer (포트 $OacxHostPort, /$ContextPath), root=$OacxRoot"
+Write-Host " OACX_PUBLIC_URL : $OacxPublicUrl"
 if ($GeneratedPw) { Write-Host " 생성된 root 비밀번호 : $DbRootPassword  ⚠ 다시 표시되지 않으니 지금 저장하세요" }
 Write-Host "==========================================================="
 if (-not (Confirm "위 설정으로 전체 스택을 배포할까요?")) {
@@ -245,16 +349,37 @@ Write-Host "########## 2단계: verifier config 패치 ##########"
 
 $VfConfigDir = Join-Path $VerifierRoot "config\config"
 $DsProp = $DsSrc
-if ($UpdateDbConfig -and (Test-Path $DsProp)) {
+# 호스트/포트/DB명(컨테이너 내부 네트워킹 배선)은 배포 때마다 항상 현재
+# DbContainer/DbName 값으로 다시 맞춘다 -- config에 이미 들어있던 값이
+# 예전 배포(다른 컨테이너명/사이트) 것일 수 있어 매번 확실히 고쳐쓴다.
+# 계정(username/password)은 "DB 접속정보 업데이트" 선택 시에만 덮어쓴다.
+if (Test-Path $DsProp) {
     $dsContent = Read-Utf8File $DsProp
     $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^\s]*', ('${1}' + $DbContainer + '${2}' + $DbName))
-    $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.hikari\.username=).*', ('${1}' + $AppUser))
-    $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.hikari\.password=).*', ('${1}' + $AppPassword))
-    Write-Utf8File $DsProp $dsContent
-    Write-Ok "verifier application-datasource.properties(원본)에 공용 DB 접속정보를 반영했습니다."
+    if ($UpdateDbConfig) {
+        $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.hikari\.username=).*', ('${1}' + $AppUser))
+        $dsContent = [regex]::Replace($dsContent, '(spring\.datasource\.hikari\.password=).*', ('${1}' + $AppPassword))
+        Write-Utf8File $DsProp $dsContent
+        Write-Ok "verifier application-datasource.properties(원본)에 공용 DB 접속정보(호스트+계정)를 반영했습니다."
+    } else {
+        Write-Utf8File $DsProp $dsContent
+        Write-Ok "verifier application-datasource.properties의 DB 호스트/포트는 현재 배포값($DbContainer)으로 맞췄고, 계정 정보는 기존 값을 유지합니다."
+    }
 } else {
-    Write-Info "config 설정값 업데이트를 선택하지 않아 application-datasource.properties는 그대로 사용합니다 (DB를 이 값에 맞춰 생성했습니다)."
+    Write-Warn2 "application-datasource.properties를 찾을 수 없어 DB 접속정보 패치를 건너뜁니다: $DsProp"
 }
+
+# verifier 자신의 외부 콜백 주소(mdl.sp.api-server-domain) -- Profile 요청/VP
+# 제출 등 앱이 직접 접근하는 주소라 배포 PC/포트가 바뀔 때마다 갱신 필요.
+# application-sp.properties(1.3.x 공통) / application-mdl-sp.properties(일부
+# 최신 버전) 둘 다 있으면 둘 다 반영한다.
+foreach ($spf in @((Join-Path $VfConfigDir "application-sp.properties"), (Join-Path $VfConfigDir "application-mdl-sp.properties"))) {
+    if (-not (Test-Path $spf)) { continue }
+    $spfContent = Read-Utf8File $spf
+    $spfContent = [regex]::Replace($spfContent, '(mdl\.sp\.api-server-domain=)https?://\S*', ('${1}' + $VfPublicDomain))
+    Write-Utf8File $spf $spfContent
+}
+Write-Ok "verifier mdl.sp.api-server-domain을 $VfPublicDomain(으)로 반영했습니다."
 
 $VfLogRoot = Join-Path (Split-Path -Parent $VerifierRoot) "log\verifier"
 New-Item -ItemType Directory -Force -Path $VfLogRoot | Out-Null
@@ -278,18 +403,23 @@ $spContent = [regex]::Replace($spContent, '(mybatis\.mapper\.path=).*', '${1}/co
 $spContent = [regex]::Replace($spContent, '(log\.file=).*', '${1}/config/logback.xml')
 $spContent = [regex]::Replace($spContent, '(log\.path=).*', '${1}/logs/app')
 $spContent = [regex]::Replace($spContent, '(oper\.mode=).*', ('${1}' + $OperSort))
+# 호스트/포트/DB명은 배포 때마다 항상 현재 DbContainer/DbName으로 다시
+# 맞춘다(예전 배포의 컨테이너명이 남아있는 문제 방지).
+if ($spContent -match '(?m)^jdbc\.type=jndi') {
+    Write-Warn2 "oacx server.properties가 아직 jdbc.type=jndi 상태입니다 -- jdbc 직결 방식으로 먼저 바꿔야 DB 접속정보 자동 반영이 적용됩니다."
+}
+$spContent = [regex]::Replace($spContent, '(jdbc\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^\s]*', ('${1}' + $DbContainer + '${2}' + $DbName))
 if ($UpdateDbConfig) {
-    $spContent = [regex]::Replace($spContent, '(jdbc\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^\s]*', ('${1}' + $DbContainer + '${2}' + $DbName))
     $spContent = [regex]::Replace($spContent, '(jdbc\.user=).*', ('${1}' + $AppUser))
     $spContent = [regex]::Replace($spContent, '(jdbc\.password=).*', ('${1}' + $AppPassword))
     Write-Utf8File $SpProp $spContent
-    Write-Ok "oacx server.properties에 공용 DB 접속정보 + oper.mode($OperSort)를 반영했습니다."
+    Write-Ok "oacx server.properties에 공용 DB 접속정보(호스트+계정) + oper.mode($OperSort)를 반영했습니다."
 } else {
     Write-Utf8File $SpProp $spContent
-    Write-Ok "oacx server.properties의 DB 접속정보는 그대로 사용, oper.mode($OperSort)/mybatis·log 경로만 반영했습니다."
+    Write-Ok "oacx server.properties의 DB 호스트/포트는 현재 배포값($DbContainer)으로 맞췄고, 계정 정보는 기존 값을 유지합니다. oper.mode($OperSort)/mybatis·log 경로도 반영."
 }
 
-# ---------- provider.json 6종: base/publicKey/vc.curveType 자동 반영 (partnerCode는 raon 고정) ----------
+# ---------- provider.json: base/publicKey/vc.curveType 자동 반영 (partnerCode는 위에서 받은 값) ----------
 Write-Info "verifier DID 파일($DidFileName)에서 publicKey/curveType을 추출합니다..."
 $DidFile = Join-Path $VerifierRoot "config\sp\$DidFileName"
 $DidPublicKey = ""
@@ -318,19 +448,24 @@ if (Test-Path $DidFile) {
     Write-Warn2 "DID 파일을 찾을 수 없습니다: $DidFile (provider.json의 publicKey는 기존 값을 유지합니다)"
 }
 
-$ProviderFiles = @("coidentitydocument-provider.json", "comdc-provider.json", "comdl-provider.json", "comnh-provider.json", "comrc-provider.json", "coresidence-provider.json")
-foreach ($pf in $ProviderFiles) {
-    $target = Join-Path $OacxConfigDir $pf
-    if (-not (Test-Path $target)) { Write-Warn2 "provider.json을 찾을 수 없습니다: $pf (건너뜁니다)"; continue }
+# co*-provider.json 전부를 대상으로 하되, "base"는 현재 우리 verifier를
+# 가리키고 있던 값일 때만 갱신한다(호스트명이 "verifier"로 시작하는 경우) --
+# naver/kakao/정부망 등 외부 인증사업자의 진짜 API 주소는 절대 건드리지
+# 않기 위한 안전장치. partnerCode/publicKey/vc.curveType은 우리 쪽 신원
+# (DID)이라 어떤 인증사업자를 부르든 공통으로 반영한다.
+$providerCount = 0
+Get-ChildItem -Path $OacxConfigDir -Filter "co*-provider.json" -File | ForEach-Object {
+    $target = $_.FullName
+    $providerCount++
     $pc = Read-Utf8File $target
-    $pc = [regex]::Replace($pc, '"base": "[^"]*"', ('"base": "http://' + $VfContainer + ':' + $VfPort + '"'))
+    $pc = [regex]::Replace($pc, '"base": "https?://verifier[^"]*"', ('"base": "http://' + $VfContainer + ':' + $VfPort + '"'))
     $pc = [regex]::Replace($pc, '"partnerCode": "[^"]*"', ('"partnerCode": "' + $PartnerCode + '"'))
     if ($DidPublicKey) { $pc = [regex]::Replace($pc, '"publicKey" ?: ?"[^"]*"', ('"publicKey" : "' + $DidPublicKey + '"')) }
     if ($DidCurveType) { $pc = [regex]::Replace($pc, '"vc\.curveType":\s*"[^"]*"', ('"vc.curveType":"' + $DidCurveType + '"')) }
     $pc = $pc -replace '/api/v2/transaction/web2appsspay', '/api/v2/transaction/web2app'
     Write-Utf8File $target $pc
 }
-Write-Ok "provider.json 6종에 base/partnerCode/publicKey/vc.curveType을 반영했습니다 (partnerCode=$PartnerCode)."
+Write-Ok "provider.json $providerCount 개에 partnerCode/publicKey/vc.curveType을 반영했고, 그 중 우리 verifier를 가리키던 base 주소는 http://${VfContainer}:${VfPort}(으)로 갱신했습니다 (외부 인증사업자 주소는 그대로 둠)."
 Write-Warn2 "serviceCode는 인증사업자별 고유값이라 자동화 대상에서 제외했습니다 -- 비어있는 파일은 직접 채워야 합니다."
 
 $ContextXml = Join-Path $ScriptDir ".staging\$OacxContainer\$ContextPath.xml"
@@ -377,22 +512,33 @@ VF_LOG_ROOT=$VfLogRoot
 OACX_IMAGE=$OacxImage
 OACX_CONTAINER=$OacxContainer
 OACX_HOST_PORT=$OacxHostPort
+OACX_PUBLIC_URL=$OacxPublicUrl
 OACX_CONFIG_DIR=$OacxConfigDir
 CONTEXT_XML=$ContextXml
 CONTEXT_PATH=$ContextPath
 OX_LOG_ROOT=$OxLogRoot
 NETWORK_NAME=$NetworkName
+COMPOSE_PROJECT=$ComposeProject
 "@ | Set-Content -Path $EnvFile -Encoding utf8
+
+# docker-compose.yml에서 이 네트워크를 external로 선언해뒀으므로(여러
+# 사이트/트랙이 공유), compose가 대신 만들어주지 않는다 -- 없으면 여기서
+# 미리 만들어둔다(이미 있으면 조용히 통과).
+docker network inspect $NetworkName *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Info "네트워크($NetworkName)가 없어 새로 만듭니다."
+    docker network create $NetworkName | Out-Null
+}
 
 $env:DB_ROOT_PASSWORD = $DbRootPassword
 $env:APP_PASSWORD = $AppPassword
 Write-Info "docker compose up -d 를 실행합니다 (db -> verifier -> oacx 순서로 기동, 시간이 걸릴 수 있습니다)..."
-docker compose -f (Join-Path $ScriptDir "docker-compose.yml") -p omnionecx --env-file $EnvFile up -d
+docker compose -f (Join-Path $ScriptDir "docker-compose.yml") -p $ComposeProject --env-file $EnvFile up -d
 $ComposeExit = $LASTEXITCODE
 Remove-Item Env:\DB_ROOT_PASSWORD -ErrorAction SilentlyContinue
 Remove-Item Env:\APP_PASSWORD -ErrorAction SilentlyContinue
 if ($ComposeExit -ne 0) {
-    Write-Err2 "docker compose up 실패 (종료 코드 $ComposeExit). 'docker compose -f docker-compose.yml -p omnionecx --env-file $EnvFile logs'로 확인하세요."
+    Write-Err2 "docker compose up 실패 (종료 코드 $ComposeExit). 'docker compose -f docker-compose.yml -p $ComposeProject --env-file $EnvFile logs'로 확인하세요."
     exit 1
 }
 
@@ -437,7 +583,7 @@ $OacxHttp = Test-Http "http://localhost:$OacxHostPort/$ContextPath/"
 
 Write-Host ""
 Write-Host "======================= 접속 정보 ======================="
-Write-Host " 버전          : $Version"
+Write-Host " 사이트        : $Site (OACX $OacxAppVersion / verifier $VerifierAppVersion, 태그=$MovingTag)"
 Write-Host " 배포 환경     : $DeployEnv (oper.mode/OperSort=$OperSort)"
 Write-Host " -------------------------- [DB] --------------------------"
 Write-Host " Host          : localhost / Port: $DbPort / DB: $DbName / User: $AppUser"

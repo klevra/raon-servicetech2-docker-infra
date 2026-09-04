@@ -33,7 +33,26 @@ LABEL maintainer="servicetech2" \
 # 생성 로직을 그대로 재사용할 수 있게 한다.
 COPY app/ /app/
 
-# config.file을 절대경로(/config/server.properties)로 미리 패치 -- default
-# 트랙에서는 배포 스크립트가 매번 하던 작업을 빌드 시점에 한 번만 수행.
-RUN sed -i -E "s#(<param-value>)\./WEB-INF/config/server\.properties(</param-value>)#\1/config/server.properties\2#" \
+# 이 산출물은 web.xml이 없고 web_normal.xml/web_mtranskey.xml 두 변형으로
+# 제공된다 -- 이 트랙은 보안키패드(mTransKey) 없이 배포하므로 web_normal.xml을
+# web.xml로 사용한다. 나머지 배포 서술자(web_mtranskey.xml, JBoss/Jeus용
+# 파일들)는 Tomcat 배포에 필요 없으므로 삭제한다.
+# 그 다음 config.file을 절대경로(/config/server.properties)로 빌드 시점에
+# 1회 패치 -- default 트랙에서는 배포 스크립트가 매번 하던 작업이다.
+RUN mv /app/WEB-INF/web_normal.xml /app/WEB-INF/web.xml \
+ && rm -f /app/WEB-INF/web_mtranskey.xml \
+          /app/WEB-INF/jboss-web.xml \
+          /app/WEB-INF/jboss-deployment-structure.xml \
+          /app/WEB-INF/jeus-web-dd.xml \
+ && sed -i -E "s#(<param-value>)\./WEB-INF/config/server\.properties(</param-value>)#\1/config/server.properties\2#" \
     /app/WEB-INF/web.xml
+
+# app/module/event.js(앱 호출 테스트 페이지)의 OACX 서버 주소는 배포하는
+# PC/환경마다 달라서 이미지에 고정할 수 없다 -- __OACX_PUBLIC_URL__
+# 플레이스홀더로 남겨두고, docker-entrypoint-wrapper.sh가 컨테이너 기동
+# 시 OACX_PUBLIC_URL 환경변수 값으로 1회 치환한다(DB의 PARTNER_CODE/
+# OPER_SORT 처리와 동일한 패턴).
+COPY docker-entrypoint-wrapper.sh /docker-entrypoint-wrapper.sh
+RUN chmod +x /docker-entrypoint-wrapper.sh
+ENTRYPOINT ["/docker-entrypoint-wrapper.sh"]
+CMD ["catalina.sh", "run"]

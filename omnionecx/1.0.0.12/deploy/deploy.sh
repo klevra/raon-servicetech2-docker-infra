@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-# OmnioneCX 1.0.0.12 통합 배포 스크립트 (bash) — 버전 고정 이미지 트랙
+# OmnioneCX 통합 배포 스크립트 (bash) — 버전 고정 이미지 트랙 (1.0.0.12)
 #
 # 지원 환경 : Linux / macOS / Windows(Git Bash, WSL)
 # 전제조건 : oracle/registry/setup-registry.sh 로 레지스트리가 떠있어야 하고,
-#            db/verifier/oacx 각각의 build-and-push.sh 로 1.0.0.12 이미지가
-#            레지스트리에 이미 등록되어 있어야 함.
+#            db/verifier/oacx 각각의 build-and-push.sh 로 omnionecx-{db,
+#            verifier,oacx}:latest 이미지가 레지스트리에 이미 등록되어
+#            있어야 함. db/verifier/oacx는 각각 하나의 리포지토리로 통합
+#            관리되고 태그는 실제 버전 번호(verifier=1.3.42, oacx=1.0.0.12)를
+#            쓰며, 이 트랙(기본/default 트랙)은 wooriib가 "wooriib" 태그를
+#            이동 태그로 쓰는 것처럼 "latest" 태그를 이동 태그로 쓴다.
 #
 # omnionecx/default 트랙과의 차이 (모두 상위 폴더(../db, ../verifier, ../oacx)의
 # 세 Dockerfile에 빌트인됨):
@@ -28,7 +32,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 NAMESPACE="servicetech2"
-VERSION="$(basename "$(dirname "$SCRIPT_DIR")")"   # deploy/의 부모 폴더명(예: 1.0.0.12)이 버전
+SITE="OmnioneCX 기본 트랙"
+# db/verifier/oacx는 각각 하나의 리포지토리로 통합 관리되고, 태그는 각자의
+# 실제 버전 번호(아래 두 값)를 쓴다. 이 트랙(기본/default 트랙)은
+# wooriib가 "wooriib" 태그를, fsb가 "fsb" 태그를 이동 태그로 쓰는 것과
+# 같은 방식으로 "latest" 태그를 이동 태그로 쓴다 -- build-and-push.sh가
+# 실제 버전 태그와 latest 태그를 항상 같이 push하므로, 이 스크립트는
+# latest만 pull하면 된다. 아래 두 값은 화면 표시용 참고 정보일 뿐이다.
+VERIFIER_APP_VERSION="1.3.42"
+OACX_APP_VERSION="1.0.0.12"
+MOVING_TAG="latest"
 
 c_reset='\033[0m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_cyan='\033[36m'
 info()  { printf "${c_cyan}[정보]${c_reset} %s\n" "$1"; }
@@ -72,8 +85,66 @@ confirm_no() {
   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
+# 이 PC가 실제 네트워크에서 쓰는 IP를 최대한 정확히 추정한다(기본 게이트웨이가
+# 잡혀있는 인터페이스 기준 -- 루프백/APIPA/가상 어댑터를 걸러내는 것보다
+# 훨씬 안정적). 실패하면 빈 문자열을 반환하고 호출부에서 수동 입력을 받는다.
+detect_local_ip() {
+  local ip=""
+  if command -v ip >/dev/null 2>&1; then
+    ip="$(ip route get 1.1.1.1 2>/dev/null | sed -nE 's/.*src ([0-9.]+).*/\1/p' | head -n1)"
+  fi
+  if [[ -z "$ip" ]] && command -v route >/dev/null 2>&1 && command -v ipconfig >/dev/null 2>&1; then
+    local iface
+    iface="$(route get 1.1.1.1 2>/dev/null | awk '/interface:/{print $2}')"
+    [[ -n "$iface" ]] && ip="$(ipconfig getifaddr "$iface" 2>/dev/null)"
+  fi
+  if [[ -z "$ip" ]] && command -v powershell.exe >/dev/null 2>&1; then
+    ip="$(powershell.exe -NoProfile -Command '(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq "Up" } | Select-Object -First 1).IPv4Address.IPAddress' 2>/dev/null | tr -d '\r\n')"
+  fi
+  echo "$ip"
+}
+
+# 이 호스트 포트가 이미 쓰이고 있는지 실제 TCP connect로 확인한다(docker가
+# 점유했든 다른 프로세스가 점유했든 다 잡아낸다).
+port_in_use() {
+  local port="$1"
+  (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null
+  local rc=$?
+  exec 3<&- 2>/dev/null; exec 3>&- 2>/dev/null
+  return $rc
+}
+
+# 이 호스트 포트를 지금 물고 있는 컨테이너 이름을 반환한다(없으면 빈 문자열).
+port_owner_container() {
+  local port="$1"
+  docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null | awk -F'\t' -v pat=":${port}->" '$2 ~ pat {print $1; exit}'
+}
+
+# preferred 포트가 비어있으면 그대로 반환. 이미 쓰이고 있어도, 그 포트를
+# 물고 있는 게 exclude(이번에 내릴 내 컨테이너)라면 재사용 가능하다고
+# 본다(어차피 곧 새로 만들면서 그 포트를 다시 쓸 것이므로). 그 외의
+# 경우(다른 사이트/무관한 프로세스)면 1씩 올려가며 빈 포트를 찾는다
+# (최대 20회 시도). ask의 "기본값"으로 이 결과를 쓰면, 사용자가 그대로
+# enter만 쳐도 실제로 뜰 수 있는 포트가 기본값이 되고, 뒤이은 설정 파일
+# 패치들도 전부 같은 변수를 재사용하므로 자동으로 일관되게 반영된다.
+find_available_port() {
+  local port="$1" exclude="${2:-}" tries=0
+  while :; do
+    local owner
+    owner="$(port_owner_container "$port")"
+    if [[ -z "$owner" ]]; then
+      port_in_use "$port" || { echo "$port"; return; }
+    elif [[ -n "$exclude" && "$owner" == "$exclude" ]]; then
+      echo "$port"; return
+    fi
+    port=$((port + 1))
+    tries=$((tries + 1))
+    if [[ "$tries" -ge 20 ]]; then echo "$port"; return; fi
+  done
+}
+
 echo "=============================================================="
-echo " OmnioneCX ${VERSION} 통합 배포 (버전 고정 이미지 트랙)"
+echo " OmnioneCX ${SITE} 통합 배포 (버전 고정 이미지 트랙, 태그=${MOVING_TAG})"
 echo " (테스트/개발/데모 목적 전용 — 운영 환경 사용 금지)"
 echo "=============================================================="
 
@@ -114,6 +185,11 @@ ask "공용 네트워크 이름" "omnionecx-net"
 NETWORK_NAME="$REPLY"
 
 echo
+info "docker compose 프로젝트 이름은 위 네트워크 이름과 별개입니다 -- 같은 PC에서 이 트랙을 여러 벌(예: 병렬 테스트) 띄우려면 서로 다르게 지정하세요."
+ask "docker compose 프로젝트 이름" "omnionecx"
+COMPOSE_PROJECT="$REPLY"
+
+echo
 ask "VF_ORGANIZATION.PARTNER_CODE / provider.json partnerCode 공통값" "raon"
 PARTNER_CODE="$REPLY"
 
@@ -139,35 +215,50 @@ fi
 
 echo
 echo "-------- DB --------"
-DB_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-db:${VERSION}"
+DB_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-db:${MOVING_TAG}"
 
 DS_SRC="${VERIFIER_ROOT}/config/config/application-datasource.properties"
+NEED_DB_PROMPT=0
 if [[ "$UPDATE_DB_CONFIG" -eq 1 ]]; then
-  ask "DB 컨테이너 이름" "db"
-  DB_CONTAINER="$REPLY"
-  ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "VC_VERIFIER"
-  DB_NAME="$REPLY"
-  ask "공용 앱 계정 이름" "omnione"
-  APP_USER="$REPLY"
-  ask_secret "공용 앱 계정 비밀번호" "0mN1DB"
-  APP_PASSWORD="$REPLY"
+  NEED_DB_PROMPT=1
 else
+  DB_CONTAINER=""; DB_NAME=""; APP_USER=""; APP_PASSWORD=""
   if [[ ! -f "$DS_SRC" ]]; then
-    err "DB 접속정보를 config에서 읽어와야 하는데 파일을 찾을 수 없습니다: $DS_SRC"
-    exit 1
+    warn "DB 접속정보를 config에서 읽어와야 하는데 파일을 찾을 수 없습니다: $DS_SRC"
+    warn "직접 입력받는 방식으로 대신 진행합니다."
+    NEED_DB_PROMPT=1
+  else
+    DERIVED_URL="$(grep -oE 'spring\.datasource\.url=jdbc:mariadb://[^[:space:]]+' "$DS_SRC" | head -n1)"
+    DB_CONTAINER="$(sed -E 's#.*//([^:/]+).*#\1#' <<< "$DERIVED_URL")"
+    DB_NAME="$(sed -E 's#.*/([^/?[:space:]]+)$#\1#' <<< "$DERIVED_URL")"
+    APP_USER="$(grep -oE 'spring\.datasource\.hikari\.username=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
+    APP_PASSWORD="$(grep -oE 'spring\.datasource\.hikari\.password=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
+    if [[ -z "$DB_CONTAINER" || -z "$DB_NAME" || -z "$APP_USER" ]]; then
+      warn "config에서 DB 접속정보를 추출하지 못했습니다 ($DS_SRC 확인 필요) -- 직접 입력받는 방식으로 대신 진행합니다."
+      NEED_DB_PROMPT=1
+    else
+      ok "config에서 DB 접속정보를 그대로 가져왔습니다: host(컨테이너명)=${DB_CONTAINER}, db=${DB_NAME}, user=${APP_USER}"
+    fi
   fi
-  DERIVED_URL="$(grep -oE 'spring\.datasource\.url=jdbc:mariadb://[^[:space:]]+' "$DS_SRC" | head -n1)"
-  DB_CONTAINER="$(sed -E 's#.*//([^:/]+).*#\1#' <<< "$DERIVED_URL")"
-  DB_NAME="$(sed -E 's#.*/([^/?[:space:]]+)$#\1#' <<< "$DERIVED_URL")"
-  APP_USER="$(grep -oE 'spring\.datasource\.hikari\.username=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
-  APP_PASSWORD="$(grep -oE 'spring\.datasource\.hikari\.password=.*' "$DS_SRC" | head -n1 | sed -E 's/^[^=]*=//')"
-  if [[ -z "$DB_CONTAINER" || -z "$DB_NAME" || -z "$APP_USER" ]]; then
-    err "config에서 DB 접속정보를 추출하지 못했습니다 ($DS_SRC 확인 필요)."
-    exit 1
-  fi
-  ok "config에서 DB 접속정보를 그대로 가져왔습니다: host(컨테이너명)=${DB_CONTAINER}, db=${DB_NAME}, user=${APP_USER}"
 fi
-ask "DB 포트 (호스트에 노출할 포트, DBeaver 등 외부 툴 접속용)" "3306"
+if [[ "$NEED_DB_PROMPT" -eq 1 ]]; then
+  ask "DB 컨테이너 이름" "${DB_CONTAINER:-db}"
+  DB_CONTAINER="$REPLY"
+  ask "DB(스키마) 이름 (verifier/oacx가 하나의 DB를 공유 -- 실제 운영값과 동일하게 기본 VC_VERIFIER)" "${DB_NAME:-VC_VERIFIER}"
+  DB_NAME="$REPLY"
+  ask "공용 앱 계정 이름" "${APP_USER:-omnione}"
+  APP_USER="$REPLY"
+  ask_secret "공용 앱 계정 비밀번호" "${APP_PASSWORD:-0mN1DB}"
+  APP_PASSWORD="$REPLY"
+  # 직접 입력받은 이상, 값이 실제 파일에도 반영되어야 하니 이후 패치
+  # 단계에서 이 값들을 강제로 적용하도록 표시한다.
+  UPDATE_DB_CONFIG=1
+fi
+DEFAULT_DB_PORT="$(find_available_port 3306 "$DB_CONTAINER")"
+if [[ "$DEFAULT_DB_PORT" != "3306" ]]; then
+  warn "3306 포트가 이미 사용 중이라, 대신 ${DEFAULT_DB_PORT}을(를) 기본값으로 제안합니다."
+fi
+ask "DB 포트 (호스트에 노출할 포트, DBeaver 등 외부 툴 접속용)" "$DEFAULT_DB_PORT"
 DB_PORT="$REPLY"
 
 echo
@@ -191,9 +282,22 @@ echo "-------- verifier --------"
 info "verifier 설정 루트: $VERIFIER_ROOT (앞에서 이미 입력받음)"
 ask "verifier 컨테이너 이름" "verifier"
 VF_CONTAINER="$REPLY"
-ask "verifier 포트" "48085"
+DEFAULT_VF_PORT="$(find_available_port 48085 "$VF_CONTAINER")"
+if [[ "$DEFAULT_VF_PORT" != "48085" ]]; then
+  warn "48085 포트가 이미 사용 중이라, 대신 ${DEFAULT_VF_PORT}을(를) 기본값으로 제안합니다."
+fi
+ask "verifier 포트" "$DEFAULT_VF_PORT"
 VF_PORT="$REPLY"
-VERIFIER_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-verifier:${VERSION}"
+VERIFIER_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-verifier:${MOVING_TAG}"
+
+DETECTED_IP="$(detect_local_ip)"
+if [[ -n "$DETECTED_IP" ]]; then
+  ok "이 PC의 IP를 감지했습니다: $DETECTED_IP"
+else
+  warn "이 PC의 IP를 자동으로 감지하지 못했습니다. 직접 입력해주세요."
+fi
+ask "verifier의 외부 콜백 주소(mdl.sp.api-server-domain, 앱이 Profile 요청/VP 제출 시 직접 접근하는 주소)" "http://${DETECTED_IP:-localhost}:${VF_PORT}"
+VF_PUBLIC_DOMAIN="$REPLY"
 
 echo
 echo "-------- oacx --------"
@@ -209,23 +313,33 @@ ask "OACX 컨테이너 이름" "oacx"
 OACX_CONTAINER="$REPLY"
 ask "OACX Context path (URL: http://localhost:<포트>/<이 값>/)" "oacx"
 CONTEXT_PATH="$REPLY"
-ask "OACX 포트" "8080"
+DEFAULT_OACX_PORT="$(find_available_port 8080 "$OACX_CONTAINER")"
+if [[ "$DEFAULT_OACX_PORT" != "8080" ]]; then
+  warn "8080 포트가 이미 사용 중이라, 대신 ${DEFAULT_OACX_PORT}을(를) 기본값으로 제안합니다."
+fi
+ask "OACX 포트" "$DEFAULT_OACX_PORT"
 OACX_HOST_PORT="$REPLY"
-OACX_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-oacx:${VERSION}"
+OACX_IMAGE="${LOCAL_REGISTRY}/${NAMESPACE}/omnionecx-oacx:${MOVING_TAG}"
+
+ask "oacx '앱 호출 테스트' 페이지에 표시할 OACX 서버 주소 (이 PC에서 접근 가능한 IP)" "http://${DETECTED_IP:-localhost}:${OACX_HOST_PORT}"
+OACX_PUBLIC_URL="$REPLY"
 
 echo
 {
 echo "======================= 실행 요약 ======================="
-echo " 버전          : $VERSION"
+echo " 사이트        : $SITE (OACX ${OACX_APP_VERSION} / verifier ${VERIFIER_APP_VERSION}, 태그=${MOVING_TAG})"
 echo " 배포 환경     : $DEPLOY_ENV (oper.mode/OPER_SORT=${OPER_SORT})"
 echo " config 업데이트 : $([[ "$UPDATE_DB_CONFIG" -eq 1 ]] && echo "예 (DB 접속정보를 아래 값으로 덮어씀)" || echo "아니오 (config 원본 값 그대로 사용, DB를 그 값에 맞춰 생성)")"
 echo " 네트워크      : $NETWORK_NAME"
+echo " compose 프로젝트 : $COMPOSE_PROJECT"
 echo " DB            : $DB_IMAGE / $DB_CONTAINER / db=$DB_NAME / port=$DB_PORT"
 echo " DB 데이터 경로 : $DB_DATA_DIR"
 echo " 공용 앱 계정  : $APP_USER"
 echo " PARTNER_CODE  : $PARTNER_CODE"
 echo " verifier      : $VERIFIER_IMAGE / $VF_CONTAINER (포트 ${VF_PORT}), root=$VERIFIER_ROOT"
+echo " VF_PUBLIC_DOMAIN : $VF_PUBLIC_DOMAIN"
 echo " oacx          : $OACX_IMAGE / $OACX_CONTAINER (포트 ${OACX_HOST_PORT}, /$CONTEXT_PATH), root=$OACX_ROOT"
+echo " OACX_PUBLIC_URL : $OACX_PUBLIC_URL"
 [[ "$GENERATED_PW" -eq 1 ]] && echo " 생성된 root 비밀번호 : $DB_ROOT_PASSWORD  ⚠ 다시 표시되지 않으니 지금 저장하세요"
 echo "==========================================================="
 }
@@ -249,16 +363,36 @@ echo "########## 2단계: verifier config 패치 ##########"
 
 VF_CONFIG_DIR="${VERIFIER_ROOT}/config/config"
 DS_PROP="$DS_SRC"
-if [[ "$UPDATE_DB_CONFIG" -eq 1 && -f "$DS_PROP" ]]; then
+# 호스트/포트/DB명(컨테이너 내부 네트워킹 배선)은 배포 때마다 항상 현재
+# DB_CONTAINER/DB_NAME 값으로 다시 맞춘다 -- config에 이미 들어있던 값이
+# 예전 배포(다른 컨테이너명/사이트) 것일 수 있어 매번 확실히 고쳐쓴다.
+# 계정(username/password)은 "DB 접속정보 업데이트" 선택 시에만 덮어쓴다.
+if [[ -f "$DS_PROP" ]]; then
   sed -i -E \
     -e "s#(spring\.datasource\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^[:space:]]*#\1${DB_CONTAINER}\2${DB_NAME}#" \
-    -e "s#(spring\.datasource\.hikari\.username=).*#\1${APP_USER}#" \
-    -e "s#(spring\.datasource\.hikari\.password=).*#\1${APP_PASSWORD}#" \
     "$DS_PROP"
-  ok "verifier application-datasource.properties(원본)에 공용 DB 접속정보를 반영했습니다."
+  if [[ "$UPDATE_DB_CONFIG" -eq 1 ]]; then
+    sed -i -E \
+      -e "s#(spring\.datasource\.hikari\.username=).*#\1${APP_USER}#" \
+      -e "s#(spring\.datasource\.hikari\.password=).*#\1${APP_PASSWORD}#" \
+      "$DS_PROP"
+    ok "verifier application-datasource.properties(원본)에 공용 DB 접속정보(호스트+계정)를 반영했습니다."
+  else
+    ok "verifier application-datasource.properties의 DB 호스트/포트는 현재 배포값(${DB_CONTAINER})으로 맞췄고, 계정 정보는 기존 값을 유지합니다."
+  fi
 else
-  info "config 설정값 업데이트를 선택하지 않아 application-datasource.properties는 그대로 사용합니다 (DB를 이 값에 맞춰 생성했습니다)."
+  warn "application-datasource.properties를 찾을 수 없어 DB 접속정보 패치를 건너뜁니다: $DS_PROP"
 fi
+
+# verifier 자신의 외부 콜백 주소(mdl.sp.api-server-domain) -- Profile 요청/VP
+# 제출 등 앱이 직접 접근하는 주소라 배포 PC/포트가 바뀔 때마다 갱신 필요.
+# application-sp.properties(1.3.x 공통) / application-mdl-sp.properties(일부
+# 최신 버전) 둘 다 있으면 둘 다 반영한다.
+for spf in "${VF_CONFIG_DIR}/application-sp.properties" "${VF_CONFIG_DIR}/application-mdl-sp.properties"; do
+  [[ -f "$spf" ]] || continue
+  sed -i -E "s#(mdl\.sp\.api-server-domain=)https?://[^[:space:]]*#\1${VF_PUBLIC_DOMAIN}#" "$spf"
+done
+ok "verifier mdl.sp.api-server-domain을 ${VF_PUBLIC_DOMAIN}(으)로 반영했습니다."
 
 VF_LOG_ROOT="$(dirname "$VERIFIER_ROOT")/log/verifier"
 mkdir -p "${VF_LOG_ROOT}"
@@ -283,18 +417,32 @@ sed -i -E \
   -e "s#(log\.path=).*#\1/logs/app#" \
   -e "s#(oper\.mode=).*#\1${OPER_SORT}#" \
   "$SP_PROP"
-if [[ "$UPDATE_DB_CONFIG" -eq 1 ]]; then
+# 호스트/포트/DB명(컨테이너 내부 네트워킹 배선)은 배포 때마다 항상 현재
+# DB_CONTAINER/DB_NAME 값으로 다시 맞춘다 -- config에 이미 들어있던 값이
+# 예전 배포(다른 컨테이너명/사이트) 것일 수 있어 매번 확실히 고쳐쓴다.
+# (전제: jdbc.type=jdbc 직결 방식으로 이미 설정되어 있어야 함 -- jndi 방식
+# 템플릿이면 이 sed는 아무 것도 바꾸지 못하니 수동으로 jdbc 직결로 바꿔둘 것)
+if [[ -f "$SP_PROP" ]]; then
+  if grep -qE '^jdbc\.type=jndi' "$SP_PROP"; then
+    warn "oacx server.properties가 아직 jdbc.type=jndi 상태입니다 -- jdbc 직결 방식으로 먼저 바꿔야 DB 접속정보 자동 반영이 적용됩니다."
+  fi
   sed -i -E \
     -e "s#(jdbc\.url=jdbc:mariadb://)[^:/]+(:[0-9]+/)[^[:space:]]*#\1${DB_CONTAINER}\2${DB_NAME}#" \
-    -e "s#(jdbc\.user=).*#\1${APP_USER}#" \
-    -e "s#(jdbc\.password=).*#\1${APP_PASSWORD}#" \
     "$SP_PROP"
-  ok "oacx server.properties에 공용 DB 접속정보 + oper.mode(${OPER_SORT})를 반영했습니다."
+  if [[ "$UPDATE_DB_CONFIG" -eq 1 ]]; then
+    sed -i -E \
+      -e "s#(jdbc\.user=).*#\1${APP_USER}#" \
+      -e "s#(jdbc\.password=).*#\1${APP_PASSWORD}#" \
+      "$SP_PROP"
+    ok "oacx server.properties에 공용 DB 접속정보(호스트+계정) + oper.mode(${OPER_SORT})를 반영했습니다."
+  else
+    ok "oacx server.properties의 DB 호스트/포트는 현재 배포값(${DB_CONTAINER})으로 맞췄고, 계정 정보는 기존 값을 유지합니다. oper.mode(${OPER_SORT})/mybatis·log 경로도 반영."
+  fi
 else
-  ok "oacx server.properties의 DB 접속정보는 그대로 사용, oper.mode(${OPER_SORT})/mybatis·log 경로만 반영했습니다."
+  warn "server.properties를 찾을 수 없어 DB 접속정보 패치를 건너뜁니다: $SP_PROP"
 fi
 
-# ---------- provider.json 6종: base/publicKey/vc.curveType 자동 반영 (partnerCode는 raon 고정) ----------
+# ---------- provider.json: base/publicKey/vc.curveType 자동 반영 (partnerCode는 위에서 받은 값) ----------
 info "verifier DID 파일(${DID_FILE_NAME})에서 publicKey/curveType을 추출합니다..."
 DID_FILE="${VERIFIER_ROOT}/config/sp/${DID_FILE_NAME}"
 DID_PUBLIC_KEY=""
@@ -318,17 +466,22 @@ else
   warn "DID 파일을 찾을 수 없습니다: $DID_FILE (provider.json의 publicKey는 기존 값을 유지합니다)"
 fi
 
-PROVIDER_FILES=(coidentitydocument-provider.json comdc-provider.json comdl-provider.json comnh-provider.json comrc-provider.json coresidence-provider.json)
-for pf in "${PROVIDER_FILES[@]}"; do
-  target="${OACX_CONFIG_DIR}/${pf}"
-  [[ -f "$target" ]] || { warn "provider.json을 찾을 수 없습니다: $pf (건너뜁니다)"; continue; }
-  sed -i -E "s#\"base\": \"[^\"]*\"#\"base\": \"http://${VF_CONTAINER}:${VF_PORT}\"#" "$target"
+# co*-provider.json 전부를 대상으로 하되, "base"는 현재 우리 verifier를
+# 가리키고 있던 값일 때만 갱신한다(호스트명이 "verifier"로 시작하는 경우) --
+# naver/kakao/정부망 등 외부 인증사업자의 진짜 API 주소는 절대 건드리지
+# 않기 위한 안전장치. partnerCode/publicKey/vc.curveType은 우리 쪽 신원
+# (DID)이라 어떤 인증사업자를 부르든 공통으로 반영한다.
+PROVIDER_COUNT=0
+for target in "${OACX_CONFIG_DIR}"/co*-provider.json; do
+  [[ -f "$target" ]] || continue
+  PROVIDER_COUNT=$((PROVIDER_COUNT + 1))
+  sed -i -E "s#\"base\": \"https?://verifier[^\"]*\"#\"base\": \"http://${VF_CONTAINER}:${VF_PORT}\"#" "$target"
   sed -i -E "s#\"partnerCode\": \"[^\"]*\"#\"partnerCode\": \"${PARTNER_CODE}\"#" "$target"
   [[ -n "$DID_PUBLIC_KEY" ]] && sed -i -E "s#\"publicKey\" ?: ?\"[^\"]*\"#\"publicKey\" : \"${DID_PUBLIC_KEY}\"#" "$target"
   [[ -n "$DID_CURVE_TYPE" ]] && sed -i -E "s#\"vc\.curveType\":\s*\"[^\"]*\"#\"vc.curveType\":\"${DID_CURVE_TYPE}\"#" "$target"
   sed -i -E 's#/api/v2/transaction/web2appsspay#/api/v2/transaction/web2app#' "$target"
 done
-ok "provider.json 6종에 base/partnerCode/publicKey/vc.curveType을 반영했습니다 (partnerCode=${PARTNER_CODE})."
+ok "provider.json ${PROVIDER_COUNT}개에 partnerCode/publicKey/vc.curveType을 반영했고, 그 중 우리 verifier를 가리키던 base 주소는 http://${VF_CONTAINER}:${VF_PORT}(으)로 갱신했습니다 (외부 인증사업자 주소는 그대로 둠)."
 warn "serviceCode는 인증사업자별 고유값이라 자동화 대상에서 제외했습니다 -- 비어있는 파일은 직접 채워야 합니다."
 
 CONTEXT_XML="${SCRIPT_DIR}/.staging/${OACX_CONTAINER}/${CONTEXT_PATH}.xml"
@@ -376,20 +529,30 @@ VF_LOG_ROOT=${VF_LOG_ROOT}
 OACX_IMAGE=${OACX_IMAGE}
 OACX_CONTAINER=${OACX_CONTAINER}
 OACX_HOST_PORT=${OACX_HOST_PORT}
+OACX_PUBLIC_URL=${OACX_PUBLIC_URL}
 OACX_CONFIG_DIR=${OACX_CONFIG_DIR}
 CONTEXT_XML=${CONTEXT_XML}
 CONTEXT_PATH=${CONTEXT_PATH}
 OX_LOG_ROOT=${OX_LOG_ROOT}
 NETWORK_NAME=${NETWORK_NAME}
+COMPOSE_PROJECT=${COMPOSE_PROJECT}
 ENVEOF
+
+# docker-compose.yml에서 이 네트워크를 external로 선언해뒀으므로(여러
+# 사이트/트랙이 공유), compose가 대신 만들어주지 않는다 -- 없으면 여기서
+# 미리 만들어둔다(이미 있으면 조용히 통과).
+if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+  info "네트워크(${NETWORK_NAME})가 없어 새로 만듭니다."
+  docker network create "$NETWORK_NAME" >/dev/null
+fi
 
 export DB_ROOT_PASSWORD APP_PASSWORD
 info "docker compose up -d 를 실행합니다 (db → verifier → oacx 순서로 기동, 시간이 걸릴 수 있습니다)..."
 COMPOSE_STATUS=0
-docker compose -f "${SCRIPT_DIR}/docker-compose.yml" -p omnionecx --env-file "$ENV_FILE" up -d || COMPOSE_STATUS=$?
+docker compose -f "${SCRIPT_DIR}/docker-compose.yml" -p "$COMPOSE_PROJECT" --env-file "$ENV_FILE" up -d || COMPOSE_STATUS=$?
 export -n DB_ROOT_PASSWORD APP_PASSWORD
 if [[ "$COMPOSE_STATUS" -ne 0 ]]; then
-  err "docker compose up 실패 (종료 코드 ${COMPOSE_STATUS}). 'docker compose -f docker-compose.yml -p omnionecx --env-file ${ENV_FILE} logs'로 확인하세요."
+  err "docker compose up 실패 (종료 코드 ${COMPOSE_STATUS}). 'docker compose -f docker-compose.yml -p ${COMPOSE_PROJECT} --env-file ${ENV_FILE} logs'로 확인하세요."
   exit 1
 fi
 
@@ -431,7 +594,7 @@ OACX_HTTP="$(check_http "http://localhost:${OACX_HOST_PORT}/${CONTEXT_PATH}/")"
 echo
 {
 echo "======================= 접속 정보 ======================="
-echo " 버전          : $VERSION"
+echo " 사이트        : $SITE (OACX ${OACX_APP_VERSION} / verifier ${VERIFIER_APP_VERSION}, 태그=${MOVING_TAG})"
 echo " 배포 환경     : $DEPLOY_ENV (oper.mode/OPER_SORT=${OPER_SORT})"
 echo " -------------------------- [DB] --------------------------"
 echo " Host          : localhost / Port: $DB_PORT / DB: $DB_NAME / User: $APP_USER"
