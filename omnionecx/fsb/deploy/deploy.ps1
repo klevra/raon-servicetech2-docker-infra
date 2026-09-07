@@ -169,10 +169,48 @@ Write-Host "  1) 개발 (기본값)"
 Write-Host "  2) 운영"
 $EnvSel = Ask "번호 선택" "1"
 switch ($EnvSel) {
-    "1" { $DeployEnv = "개발"; $OperSort = "dev";  $DidFileName = "raondev2.sp.did" }
-    "2" { $DeployEnv = "운영"; $OperSort = "prod"; $DidFileName = "raonEnt.did" }
+    "1" {
+        $DeployEnv = "개발"; $OperSort = "dev"; $DidFileName = "raondev2.sp.did"
+        $SpEnvSubdir = "dev"
+        $SpServerKeyManagerPath = "/config/sp/dev"
+        $SpRcpHost = "https://bcdev.mobileid.go.kr:18888"
+        $SpKeyManagerPath = "raondev2.sp.wallet"
+        $SpKeyManagerPassword = "raon12345!"
+        $SpKeyId = "dev2.sp"
+        $SpRsaKeyId = "dev2.sp.rsa"
+        $SpServiceCode = "raonsecure.1"
+        $SpCaListDomain = "https://mipdev.mobileid.go.kr:23443/v1/capush/list"
+    }
+    "2" {
+        $DeployEnv = "운영"; $OperSort = "prod"; $DidFileName = "raonEnt.did"
+        $SpEnvSubdir = "prod"
+        $SpServerKeyManagerPath = "/config/sp/prod"
+        $SpRcpHost = "https://bcc.mobileid.go.kr:18888"
+        $SpKeyManagerPath = "raonEnt.wallet"
+        $SpKeyManagerPassword = "1q2w3e4r!@"
+        $SpKeyId = "raonEnt.sp"
+        $SpRsaKeyId = "raonEnt.sp.rsa"
+        $SpServiceCode = "raonsnc.1"
+        $SpCaListDomain = "https://pub.mobileid.go.kr:10443/v1/capush/list"
+    }
     default { Write-Err2 "잘못된 선택입니다."; exit 1 }
 }
+
+# mdl.sp.ca-list-data-cron-enabled는 고정값 대신, 선택한 환경의 CA 앱 목록
+# 서버(SpCaListDomain -- 개발/운영 도메인이 다름)가 실제로 응답하는지 직접
+# 호출해서 판단한다. 1초 안에 정상 응답이 오면 true(동기화 스케줄러
+# 활성화), 응답이 없거나 실패하면 false로 둔다 -- 죽어있는 서버를 계속
+# 찔러대는 무의미한 스케줄러 동작을 막기 위함.
+Write-Info "CA 앱 목록 서버($SpCaListDomain) 응답 여부를 확인합니다 (1초 대기)..."
+try {
+    Invoke-WebRequest -Uri $SpCaListDomain -Method Post -Headers @{ "Content-Type" = "application/json" } -Body '{"apiType" : "mip"}' -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop | Out-Null
+    $SpCaListCronEnabled = "true"
+    Write-Ok "CA 앱 목록 서버 응답 확인 -- mdl.sp.ca-list-data-cron-enabled=true로 설정합니다."
+} catch {
+    $SpCaListCronEnabled = "false"
+    Write-Warn2 "CA 앱 목록 서버($SpCaListDomain)가 1초 내에 응답하지 않습니다 -- mdl.sp.ca-list-data-cron-enabled=false로 설정합니다."
+}
+
 if ($DeployEnv -eq "운영") {
     Write-Warn2 "이 스크립트는 데이터가 DbDataDir 볼륨에만 영속화되는 테스트/개발용 배포입니다."
     if (-not (Confirm-No "정말로 '운영' 환경 대상으로 진행할까요? (권장하지 않음)")) {
@@ -377,9 +415,20 @@ foreach ($spf in @((Join-Path $VfConfigDir "application-sp.properties"), (Join-P
     if (-not (Test-Path $spf)) { continue }
     $spfContent = Read-Utf8File $spf
     $spfContent = [regex]::Replace($spfContent, '(mdl\.sp\.api-server-domain=)https?://\S*', ('${1}' + $VfPublicDomain))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.server-key-manager-path=).*', ('${1}' + $SpServerKeyManagerPath))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.rcp-host=).*', ('${1}' + $SpRcpHost))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.key-manager-path=).*', ('${1}' + $SpKeyManagerPath))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.key-manager-password=).*', ('${1}' + $SpKeyManagerPassword))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.did-file-path=).*', ('${1}' + $DidFileName))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.key-id=).*', ('${1}' + $SpKeyId))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.rsa-key-id=).*', ('${1}' + $SpRsaKeyId))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.service-code=).*', ('${1}' + $SpServiceCode))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.ca-list-domain=).*', ('${1}' + $SpCaListDomain))
+    $spfContent = [regex]::Replace($spfContent, '(?m)^(mdl\.sp\.ca-list-data-cron-enabled=).*', ('${1}' + $SpCaListCronEnabled))
     Write-Utf8File $spf $spfContent
 }
 Write-Ok "verifier mdl.sp.api-server-domain을 $VfPublicDomain(으)로 반영했습니다."
+Write-Ok "verifier 지갑/DID/블록체인 접속정보(server-key-manager-path, rcp-host, key-manager-*, did-file-path, key-id, rsa-key-id, service-code, 있으면 ca-list-*)를 $DeployEnv 환경 값으로 반영했습니다."
 
 $VfLogRoot = Join-Path (Split-Path -Parent $VerifierRoot) "log\verifier"
 New-Item -ItemType Directory -Force -Path $VfLogRoot | Out-Null
@@ -421,7 +470,7 @@ if ($UpdateDbConfig) {
 
 # ---------- provider.json 6종: base/publicKey/vc.curveType 자동 반영 (partnerCode는 raon 고정) ----------
 Write-Info "verifier DID 파일($DidFileName)에서 publicKey/curveType을 추출합니다..."
-$DidFile = Join-Path $VerifierRoot "config\sp\$DidFileName"
+$DidFile = Join-Path $VerifierRoot "config\sp\$SpEnvSubdir\$DidFileName"
 $DidPublicKey = ""
 $DidCurveType = ""
 if (Test-Path $DidFile) {

@@ -160,10 +160,45 @@ echo "  1) 개발 (기본값)"
 echo "  2) 운영"
 ask "번호 선택" "1"
 case "$REPLY" in
-  1) DEPLOY_ENV="개발"; OPER_SORT="dev"; DID_FILE_NAME="raondev2.sp.did" ;;
-  2) DEPLOY_ENV="운영"; OPER_SORT="prod"; DID_FILE_NAME="raonEnt.did" ;;
+  1) DEPLOY_ENV="개발"; OPER_SORT="dev"; DID_FILE_NAME="raondev2.sp.did"
+     SP_ENV_SUBDIR="dev"
+     SP_SERVER_KEY_MANAGER_PATH="/config/sp/dev"
+     SP_RCP_HOST="https://bcdev.mobileid.go.kr:18888"
+     SP_KEY_MANAGER_PATH="raondev2.sp.wallet"
+     SP_KEY_MANAGER_PASSWORD="raon12345!"
+     SP_KEY_ID="dev2.sp"
+     SP_RSA_KEY_ID="dev2.sp.rsa"
+     SP_SERVICE_CODE="raonsecure.1"
+     SP_CA_LIST_DOMAIN="https://mipdev.mobileid.go.kr:23443/v1/capush/list"
+     ;;
+  2) DEPLOY_ENV="운영"; OPER_SORT="prod"; DID_FILE_NAME="raonEnt.did"
+     SP_ENV_SUBDIR="prod"
+     SP_SERVER_KEY_MANAGER_PATH="/config/sp/prod"
+     SP_RCP_HOST="https://bcc.mobileid.go.kr:18888"
+     SP_KEY_MANAGER_PATH="raonEnt.wallet"
+     SP_KEY_MANAGER_PASSWORD="1q2w3e4r!@"
+     SP_KEY_ID="raonEnt.sp"
+     SP_RSA_KEY_ID="raonEnt.sp.rsa"
+     SP_SERVICE_CODE="raonsnc.1"
+     SP_CA_LIST_DOMAIN="https://pub.mobileid.go.kr:10443/v1/capush/list"
+     ;;
   *) err "잘못된 선택입니다."; exit 1 ;;
 esac
+
+# mdl.sp.ca-list-data-cron-enabled는 고정값 대신, 선택한 환경의 CA 앱 목록
+# 서버(SP_CA_LIST_DOMAIN -- 개발/운영 도메인이 다름)가 실제로 응답하는지
+# 직접 호출해서 판단한다. 1초 안에 정상 응답이 오면 true(동기화 스케줄러
+# 활성화), 응답이 없거나 실패하면 false로 둔다 -- 죽어있는 서버를 계속
+# 찔러대는 무의미한 스케줄러 동작을 막기 위함.
+info "CA 앱 목록 서버(${SP_CA_LIST_DOMAIN}) 응답 여부를 확인합니다 (1초 대기)..."
+if curl -s -f --max-time 1 --location "${SP_CA_LIST_DOMAIN}" --header 'Content-Type: application/json' --data '{"apiType" : "mip"}' >/dev/null 2>&1; then
+  SP_CA_LIST_CRON_ENABLED="true"
+  ok "CA 앱 목록 서버 응답 확인 -- mdl.sp.ca-list-data-cron-enabled=true로 설정합니다."
+else
+  SP_CA_LIST_CRON_ENABLED="false"
+  warn "CA 앱 목록 서버(${SP_CA_LIST_DOMAIN})가 1초 내에 응답하지 않습니다 -- mdl.sp.ca-list-data-cron-enabled=false로 설정합니다."
+fi
+
 if [[ "$DEPLOY_ENV" == "운영" ]]; then
   warn "이 스크립트는 데이터가 DB_DATA_DIR 볼륨에만 영속화되는 테스트/개발용 배포입니다."
   if ! confirm_no "정말로 '운영' 환경 대상으로 진행할까요? (권장하지 않음)"; then
@@ -388,11 +423,32 @@ fi
 # 제출 등 앱이 직접 접근하는 주소라 배포 PC/포트가 바뀔 때마다 갱신 필요.
 # application-sp.properties(1.3.x 공통) / application-mdl-sp.properties(일부
 # 최신 버전) 둘 다 있으면 둘 다 반영한다.
+#
+# 지갑(wallet)/DID/블록체인 접속정보는 raondev2.sp(개발) / raonEnt(운영) 두
+# 신원 중 이번에 선택한 환경(DEPLOY_ENV/OPER_SORT)에 맞는 값으로 매번 다시
+# 맞춘다 -- 예전에는 파일 안에 "### dev / ### prod" 두 줄을 넣어두고 사람이
+# 손으로 주석을 바꿔가며 전환했는데, 실수로 한쪽만 바꾸면(예: wallet 파일명은
+# 운영으로 바꿨는데 rcp-host는 개발 그대로) 조용히 잘못된 조합으로 기동되는
+# 문제가 있었다. ca-list-* 두 필드는 verifier 버전에 따라 템플릿 자체에
+# 없는 경우가 있어(예: 1.3.19_fix) grep으로 존재를 확인한 뒤에만 반영한다.
 for spf in "${VF_CONFIG_DIR}/application-sp.properties" "${VF_CONFIG_DIR}/application-mdl-sp.properties"; do
   [[ -f "$spf" ]] || continue
   sed -i -E "s#(mdl\.sp\.api-server-domain=)https?://[^[:space:]]*#\1${VF_PUBLIC_DOMAIN}#" "$spf"
+  sed -i -E \
+    -e "s#^(mdl\.sp\.server-key-manager-path=).*#\1${SP_SERVER_KEY_MANAGER_PATH}#" \
+    -e "s#^(mdl\.sp\.rcp-host=).*#\1${SP_RCP_HOST}#" \
+    -e "s#^(mdl\.sp\.key-manager-path=).*#\1${SP_KEY_MANAGER_PATH}#" \
+    -e "s#^(mdl\.sp\.key-manager-password=).*#\1${SP_KEY_MANAGER_PASSWORD}#" \
+    -e "s#^(mdl\.sp\.did-file-path=).*#\1${DID_FILE_NAME}#" \
+    -e "s#^(mdl\.sp\.key-id=).*#\1${SP_KEY_ID}#" \
+    -e "s#^(mdl\.sp\.rsa-key-id=).*#\1${SP_RSA_KEY_ID}#" \
+    -e "s#^(mdl\.sp\.service-code=).*#\1${SP_SERVICE_CODE}#" \
+    "$spf"
+  grep -q '^mdl\.sp\.ca-list-domain=' "$spf" && sed -i -E "s#^(mdl\.sp\.ca-list-domain=).*#\1${SP_CA_LIST_DOMAIN}#" "$spf"
+  grep -q '^mdl\.sp\.ca-list-data-cron-enabled=' "$spf" && sed -i -E "s#^(mdl\.sp\.ca-list-data-cron-enabled=).*#\1${SP_CA_LIST_CRON_ENABLED}#" "$spf"
 done
 ok "verifier mdl.sp.api-server-domain을 ${VF_PUBLIC_DOMAIN}(으)로 반영했습니다."
+ok "verifier 지갑/DID/블록체인 접속정보(server-key-manager-path, rcp-host, key-manager-*, did-file-path, key-id, rsa-key-id, service-code, 있으면 ca-list-*)를 ${DEPLOY_ENV} 환경 값으로 반영했습니다."
 
 VF_LOG_ROOT="$(dirname "$VERIFIER_ROOT")/log/verifier"
 mkdir -p "${VF_LOG_ROOT}"
@@ -444,7 +500,7 @@ fi
 
 # ---------- provider.json: base/publicKey/vc.curveType 자동 반영 (partnerCode는 위에서 받은 값) ----------
 info "verifier DID 파일(${DID_FILE_NAME})에서 publicKey/curveType을 추출합니다..."
-DID_FILE="${VERIFIER_ROOT}/config/sp/${DID_FILE_NAME}"
+DID_FILE="${VERIFIER_ROOT}/config/sp/${SP_ENV_SUBDIR}/${DID_FILE_NAME}"
 DID_PUBLIC_KEY=""
 DID_CURVE_TYPE=""
 if [[ -f "$DID_FILE" ]]; then
