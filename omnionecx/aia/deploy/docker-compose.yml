@@ -1,0 +1,186 @@
+# ============================================================================
+# OmnioneCX aia(2.0.0.1) 통합 배포 — docker compose 템플릿 (백포팅 트랙)
+#
+# 2.0.0.3 트랙의 템플릿을 그대로 재사용한다(전부 env-var 기반이라 사이트별
+# 하드코딩 값이 없음) -- aia는 2.0.0.3과 동일한 구조(verifier/oacx/admin
+# 모두 내장 Tomcat 포함 실행형 fat jar, jdk21)를 쓰는 cx 2.0 계열의 백포팅
+# 버전이라 이 템플릿을 그대로 쓸 수 있다.
+#
+# 1.0.0.12 트랙과의 핵심 차이:
+#   - verifier/oacx/admin 모두 내장 Tomcat 포함 실행형 fat jar(Spring Boot,
+#     verifier만 Boot 2.7.4/jdk8 바이트코드, oacx/admin은 Boot 3.5.10)이다.
+#     oacx는 더 이상 외장 Tomcat + WAR가 아니라서 CONTEXT_XML 생성/마운트가
+#     필요 없다 -- context-path(/oacx/api)와 port가 이미지 안 application.yml에
+#     고정되어 있다.
+#   - admin이 신규 추가되었다 (1.0.0.12/wooriib/fsb에는 없음). oacx/verifier와
+#     동일한 VC_VERIFIER DB 스키마를 공유하는 OACX 관리자 콘솔이다.
+#   - verifier는 application.yml을 절대경로 /config에서 읽으므로
+#     SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/ 환경변수로 위치를
+#     알려준다(1.0.0.12와 동일한 방식). oacx/admin은 반대로 상대경로
+#     (./config/...)를 쓰므로 WORKDIR(/app) 기준 /app/config 마운트만으로
+#     Spring Boot가 자동으로 찾는다 -- 별도 환경변수 불필요.
+#   - DB는 1.0.0.12와 동일하게 DDL/DML이 이미지에 빌트인되어 있고
+#     PARTNER_CODE/OPER_SORT를 컨테이너 환경변수로 배포 시점에 정한다.
+#
+# 타임존/시간: 모든 컨테이너를 Asia/Seoul로 고정한다(TZ 환경변수 -- 값 자체는
+# 배포 시점에 바꿀 수 있는 변수가 아니라 이 템플릿에 박아둔 고정값). 컨테이너는
+# 어차피 호스트 커널의 시각(NTP 포함)을 그대로 공유하므로 컨테이너 안에
+# 별도 NTP 데몬을 둘 필요는 없다 -- 어긋나 보이는 건 시각 자체가 아니라
+# 타임존 표기 문제였다(설정 전엔 UTC로 찍혀 호스트/DB의 Asia/Seoul 표시와
+# 9시간 차이가 났음).
+#
+# JAVA_OPTS -Djava.security.egd=file:/dev/./urandom : JDK(eclipse-temurin)의
+# 기본 java.security가 securerandom.source=file:/dev/random(블로킹)으로 되어
+# 있어, 엔트로피가 부족하면 SecureRandom을 쓰는 암호화 연산(이미지 생성 시
+# 워터마크/임시키 등)이 수 초~수십 초 지연될 수 있다 -- oacx->verifier 호출이
+# PROVIDER_IF.connection.timeout(5000ms)보다 오래 걸려 SocketTimeoutException이
+# 나던 문제의 원인 중 하나로 지목됨. /dev/./urandom(논블로킹, 암호학적으로
+# 안전)을 쓰도록 전 서비스에 고정한다.
+#
+# 헬스체크 옵셔널: HEALTHCHECK_ENABLED(deploy.sh가 물어봄)에 따라 각 서비스의
+# HC_*_CMD 환경변수가 "실제 curl 체크" 또는 "exit 0(즉시 통과)"로 바뀐다 --
+# 비활성화해도 depends_on: condition: service_healthy 구조 자체는 그대로 두고
+# healthcheck가 항상 즉시 성공하게만 만드는 방식이라 별도 조건 분기가 필요 없다.
+#
+# 이 파일도 직접 실행하지 않는다. aia 전용 deploy.sh/.ps1이 대화형으로
+# 값을 수령해 .env를 생성한 뒤 `docker compose --env-file <생성된 .env> up -d`로
+# 이 템플릿을 구동한다.
+# ============================================================================
+services:
+  db:
+    image: ${DB_IMAGE}
+    container_name: ${DB_CONTAINER}
+    networks: [omnionecx]
+    ports:
+      - "${DB_PORT}:3306"
+    volumes:
+      - ${DB_DATA_DIR}:/var/lib/mysql
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME}
+      MARIADB_USER: ${APP_USER}
+      MARIADB_PASSWORD: ${APP_PASSWORD}
+      PARTNER_CODE: ${PARTNER_CODE}
+      OPER_SORT: ${OPER_SORT}
+      TZ: Asia/Seoul
+    healthcheck:
+      test: ["CMD-SHELL", "${HC_DB_CMD}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  verifier:
+    image: ${VERIFIER_IMAGE}
+    container_name: ${VF_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${VF_PORT}:${VF_PORT}"
+    volumes:
+      - ${VF_CONFIG_DIR}:/config
+      - ${VERIFIER_CONFIG_ROOT}/template:/config/template:ro
+      - ${VERIFIER_CONFIG_ROOT}/license:/config/license:ro
+      - ${VERIFIER_CONFIG_ROOT}/sp:/config/sp:ro
+      - ${VERIFIER_CONFIG_ROOT}/fonts:/config/fonts:ro
+      - ${VF_LOG_ROOT}:/logs
+    environment:
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/
+      LOGGING_FILE_PATH: /logs
+      SERVER_PORT: ${VF_PORT}
+      TZ: Asia/Seoul
+      JAVA_OPTS: -Djava.security.egd=file:/dev/./urandom
+    healthcheck:
+      test: ["CMD-SHELL", "${HC_VF_CMD}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+
+  oacx:
+    image: ${OACX_IMAGE}
+    container_name: ${OACX_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      verifier:
+        condition: service_healthy
+    ports:
+      - "${OACX_HOST_PORT}:${OACX_HOST_PORT}"
+    volumes:
+      - ${OACX_CONFIG_DIR}:/app/config:ro
+      - ${OX_LOG_ROOT}:/logs
+    environment:
+      LOGGING_FILE_PATH: /logs
+      SERVER_PORT: ${OACX_HOST_PORT}
+      TZ: Asia/Seoul
+      JAVA_OPTS: -Djava.security.egd=file:/dev/./urandom
+    healthcheck:
+      test: ["CMD-SHELL", "${HC_OACX_CMD}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+
+  admin:
+    image: ${ADMIN_IMAGE}
+    container_name: ${ADMIN_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      oacx:
+        condition: service_healthy
+    ports:
+      - "${ADMIN_HOST_PORT}:${ADMIN_HOST_PORT}"
+    volumes:
+      - ${ADMIN_CONFIG_DIR}:/app/config:ro
+      - ${ADMIN_LOG_ROOT}:/logs
+    environment:
+      LOGGING_FILE_PATH: /logs
+      SERVER_PORT: ${ADMIN_HOST_PORT}
+      TZ: Asia/Seoul
+      JAVA_OPTS: -Djava.security.egd=file:/dev/./urandom
+    healthcheck:
+      test: ["CMD-SHELL", "${HC_ADMIN_CMD}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+
+  # sample: 1.0.0.12에서는 oacx WAR 안에 번들되어 있던 앱 호출 테스트 페이지가
+  # 2.0.0.3에서는 별도 Spring Boot 앱(mobileid-sample-springboot, Boot 2.7.18)으로
+  # 분리 제공된다. oacx의 REST API(/oacx/api)를 호출해 인증 흐름을 시연한다.
+  sample:
+    image: ${SAMPLE_IMAGE}
+    container_name: ${SAMPLE_CONTAINER}
+    networks: [omnionecx]
+    depends_on:
+      oacx:
+        condition: service_healthy
+    ports:
+      - "${SAMPLE_HOST_PORT}:${SAMPLE_HOST_PORT}"
+    volumes:
+      - ${SAMPLE_CONFIG_DIR}:/app/config:ro
+      - ${SAMPLE_LOG_ROOT}:/logs
+    environment:
+      LOGGING_FILE_PATH: /logs
+      SERVER_PORT: ${SAMPLE_HOST_PORT}
+      TZ: Asia/Seoul
+      JAVA_OPTS: -Djava.security.egd=file:/dev/./urandom
+    healthcheck:
+      test: ["CMD-SHELL", "${HC_SAMPLE_CMD}"]
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 20
+
+networks:
+  # 여러 사이트/트랙(1.0.0.12/wooriib/fsb/2.0.0.3/...)이 같은 이름의
+  # 네트워크를 공유해서 쓸 수 있게 external로 선언한다 -- external이 아니면
+  # compose가 이 네트워크를 자기 project 소유로 라벨링하려다, 이미 다른
+  # project가 만들어둔 네트워크와 라벨이 달라 "found but has incorrect
+  # label" 오류로 기동 자체가 실패한다. 실제 생성은 deploy.sh/.ps1이 compose
+  # 실행 전에 없으면 만들어둔다.
+  omnionecx:
+    name: ${NETWORK_NAME}
+    external: true
