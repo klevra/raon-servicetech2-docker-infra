@@ -94,9 +94,9 @@ oacx·admin·sample config + docker-compose.yml + deploy.sh/exec.sh)를
 - [x] sample 테스트 페이지를 통한 실제 인증 흐름(getCertInfo → trans/info →
       CA 리스트 → QR 발급) 재현 확인
 - [x] oacx↔verifier 타임아웃 문제 원인 규명 및 조치 (위 내용 참고)
-- [ ] `deploy.ps1`/`exec.ps1`(PowerShell 버전) — 미작성
-- [ ] admin 콘솔에서 실제 서비스-provider 등록 후 모바일 지갑으로 VP 제출까지
-      end-to-end 재현 — 미완료 (QR 발급까지는 확인, 실제 스캔 이후 흐름은
-      실물 지갑 앱이 있어야 재현 가능)
-- [ ] admin의 `token.key.jwt` 값(`OACX-ENT@123456789012345678901234`)이
-      플레이스홀더처럼 보이는 패턴 -- 실제 운영 투입 전 회전 필요 여부 확인 필요
+- [x] `deploy.ps1`/`exec.ps1`(PowerShell 버전) 작성 완료
+- [x] admin 콘솔 서비스-provider 등록 → 모바일 지갑 VP 제출 → 검증까지
+      `sandbox/`에서 구현·테스트 완료 (운영측 제출/검증까지 확인)
+- [x] admin의 `token.key.jwt`(`OACX-ENT@123456789012345678901234`) — 특정
+      옵션이 적용될 때 이 값이 사용/변경되는 정상 동작이며 플레이스홀더가
+      아님. 그대로 유지.
